@@ -1,0 +1,10 @@
+<!--<?xml version="1.0" encoding="UTF-8" ?>-->
+<!--<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"-->
+<!--        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">-->
+
+<!--<mapper namespace="com.remus.dwanjcex.wallet.mapper.TradeMapper">-->
+<!--    <insert id="insert" parameterType="com.remus.dwanjcex.wallet.entity.Trade" useGeneratedKeys="true" keyProperty="id">-->
+<!--        INSERT INTO trades(buy_order_id, sell_order_id, price, quantity, created_at)-->
+<!--        VALUES(#{buyOrderId}, #{sellOrderId}, #{price}, #{quantity}, #{createdAt})-->
+<!--    </insert>-->
+<!--</mapper>-->

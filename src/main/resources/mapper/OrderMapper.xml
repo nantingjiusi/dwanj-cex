@@ -1,0 +1,25 @@
+<!--<?xml version="1.0" encoding="UTF-8" ?>-->
+<!--<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"-->
+<!--        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">-->
+
+<!--<mapper namespace="com.remus.dwanjcex.wallet.mapper.OrderMapper">-->
+<!--&lt;!&ndash;    <insert id="insert" parameterType="com.remus.dwanjcex.wallet.entity.OrderEntity" useGeneratedKeys="true" keyProperty="id">&ndash;&gt;-->
+<!--&lt;!&ndash;        INSERT INTO orders(user_id, symbol, price, amount, filled, side, status, created_at)&ndash;&gt;-->
+<!--&lt;!&ndash;        VALUES(#{userId}, #{symbol}, #{price}, #{amount}, #{filled}, #{side}, #{status}, #{createdAt})&ndash;&gt;-->
+<!--&lt;!&ndash;    </insert>&ndash;&gt;-->
+
+<!--    <update id="update" parameterType="com.remus.dwanjcex.wallet.entity.OrderEntity">-->
+<!--        UPDATE orders-->
+<!--        SET price = #{price},-->
+<!--            amount = #{amount},-->
+<!--            filled = #{filled},-->
+<!--            status = #{status},-->
+<!--            updated_at = NOW(),-->
+<!--            version = version + 1-->
+<!--        WHERE id = #{id} AND version = #{version}-->
+<!--    </update>-->
+
+<!--    <select id="selectById" parameterType="java.lang.Long" resultType="com.remus.dwanjcex.wallet.entity.OrderEntity">-->
+<!--        SELECT * FROM orders WHERE id=#{id}-->
+<!--    </select>-->
+<!--</mapper>-->
