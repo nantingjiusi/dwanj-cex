@@ -4,9 +4,11 @@ import com.lmax.disruptor.EventFactory;
 import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.util.DaemonThreadFactory;
-import com.remus.dwanjcex.disruptor.event.OrderEvent;
+import com.remus.dwanjcex.disruptor.event.DisruptorEvent;
+import com.remus.dwanjcex.disruptor.event.EventType;
 import com.remus.dwanjcex.disruptor.handler.MatchingHandler;
 import com.remus.dwanjcex.disruptor.handler.PersistenceHandler;
+import com.remus.dwanjcex.wallet.entity.dto.CancelOrderDto;
 import com.remus.dwanjcex.wallet.entity.dto.OrderDto;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -17,12 +19,11 @@ import org.springframework.stereotype.Service;
 @Service
 public class DisruptorService {
 
-    // 移除了 JournalingHandler 的引用
     private final MatchingHandler matchingHandler;
     private final PersistenceHandler persistenceHandler;
 
-    private Disruptor<OrderEvent> disruptor;
-    private RingBuffer<OrderEvent> ringBuffer;
+    private Disruptor<DisruptorEvent> disruptor;
+    private RingBuffer<DisruptorEvent> ringBuffer;
 
     public DisruptorService(MatchingHandler matchingHandler, PersistenceHandler persistenceHandler) {
         this.matchingHandler = matchingHandler;
@@ -33,11 +34,10 @@ public class DisruptorService {
     public void start() {
         log.info("启动Disruptor服务...");
 
-        EventFactory<OrderEvent> factory = OrderEvent::new;
+        EventFactory<DisruptorEvent> factory = DisruptorEvent::new;
         int bufferSize = 1024 * 1024;
         this.disruptor = new Disruptor<>(factory, bufferSize, DaemonThreadFactory.INSTANCE);
 
-        // 调整处理链，直接从 MatchingHandler 开始
         this.disruptor.handleEventsWith(matchingHandler)
                 .then(persistenceHandler);
 
@@ -46,28 +46,45 @@ public class DisruptorService {
     }
 
     /**
-     * 将从Kafka消费的订单发布到Disruptor环形缓冲区。
-     *
-     * @param orderId 订单ID
-     * @param dto     订单数据传输对象
+     * 发布一个 "下单" 事件到Disruptor。
+     * @param orderId 数据库生成的订单ID
+     * @param dto 订单数据
      */
-    public void publishToRingBuffer(Long orderId, OrderDto dto) {
+    public void publishPlaceOrderEvent(Long orderId, OrderDto dto) {
         if (ringBuffer == null) {
-            log.error("Disruptor尚未启动，无法发布事件。");
+            log.error("Disruptor尚未启动，无法发布下单事件。");
             return;
         }
-
         long sequence = ringBuffer.next();
         try {
-            OrderEvent event = ringBuffer.get(sequence);
-            event.setOrderId(orderId);
-            event.setSymbol(dto.getSymbol());
-            event.setPrice(dto.getPrice());
-            event.setAmount(dto.getAmount());
-            event.setSide(dto.getSide());
-            event.setUserId(dto.getUserId());
+            DisruptorEvent event = ringBuffer.get(sequence);
+            event.clear();
+            event.setType(EventType.PLACE_ORDER);
+            event.setOrderId(orderId); // 填充独立的orderId字段
+            event.setPlaceOrder(dto);
         } finally {
-            log.info("[Disruptor - Publisher] 发布事件到RingBuffer, 序列号: {}", sequence);
+            log.info("[Disruptor - Publisher] 发布下单事件到RingBuffer, 序列号: {}", sequence);
+            ringBuffer.publish(sequence);
+        }
+    }
+
+    /**
+     * 发布一个 "取消订单" 事件到Disruptor。
+     * @param dto 取消订单数据
+     */
+    public void publishCancelOrderEvent(CancelOrderDto dto) {
+        if (ringBuffer == null) {
+            log.error("Disruptor尚未启动，无法发布取消事件。");
+            return;
+        }
+        long sequence = ringBuffer.next();
+        try {
+            DisruptorEvent event = ringBuffer.get(sequence);
+            event.clear();
+            event.setType(EventType.CANCEL_ORDER);
+            event.setCancelOrder(dto);
+        } finally {
+            log.info("[Disruptor - Publisher] 发布取消事件到RingBuffer, 序列号: {}", sequence);
             ringBuffer.publish(sequence);
         }
     }

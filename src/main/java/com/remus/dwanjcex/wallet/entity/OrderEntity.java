@@ -2,23 +2,27 @@ package com.remus.dwanjcex.wallet.entity;
 
 import com.remus.dwanjcex.common.OrderStatus;
 import com.remus.dwanjcex.common.OrderTypes;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Objects;
 
-
-@Data
+/**
+ * 订单实体。
+ * 注意：移除了@Data注解，并手动实现了equals()和hashCode()，
+ * 以确保对象的身份仅由其ID决定，不受其他可变字段的影响。
+ */
+@Getter
+@Setter
+@ToString
+@Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
 public class OrderEntity {
     private Long id;
     private Long userId;
-    private String symbol;        // BTC/USDT
+    private String symbol;        // e.g., BTCUSDT
     private BigDecimal price;
     private BigDecimal amount;
     private BigDecimal filled = BigDecimal.ZERO;
@@ -27,7 +31,6 @@ public class OrderEntity {
     private LocalDateTime createdAt = LocalDateTime.now();
     private LocalDateTime updatedAt = LocalDateTime.now();
     private Long version = 0L;   // 乐观锁字段
-
 
     /** 剩余未成交数量 */
     public BigDecimal getRemaining() {
@@ -43,6 +46,21 @@ public class OrderEntity {
 
     /** 判断订单是否完全成交 */
     public boolean isFullyFilled() {
-        return filled != null && filled.compareTo(amount) >= 0;
+        return filled != null && amount != null && filled.compareTo(amount) >= 0;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        OrderEntity that = (OrderEntity) o;
+        // 实体对象的身份只由ID决定
+        return Objects.equals(id, that.id);
+    }
+
+    @Override
+    public int hashCode() {
+        // 实体对象的哈希码只由ID决定
+        return Objects.hash(id);
     }
 }

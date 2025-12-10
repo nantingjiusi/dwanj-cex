@@ -2,75 +2,108 @@ package com.remus.dwanjcex.disruptor.handler;
 
 import com.lmax.disruptor.EventHandler;
 import com.remus.dwanjcex.common.OrderTypes;
-import com.remus.dwanjcex.disruptor.event.OrderEvent;
+import com.remus.dwanjcex.disruptor.event.DisruptorEvent;
 import com.remus.dwanjcex.disruptor.event.TradeEvent;
 import com.remus.dwanjcex.engine.OrderBook;
 import com.remus.dwanjcex.wallet.entity.OrderEntity;
+import com.remus.dwanjcex.wallet.entity.dto.CancelOrderDto;
 import com.remus.dwanjcex.wallet.entity.dto.OrderBookLevel;
+import com.remus.dwanjcex.wallet.entity.dto.OrderDto;
+import com.remus.dwanjcex.wallet.services.SymbolService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.util.*;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 事件处理器 - 第二阶段：核心撮合
+ * 事件处理器 - 核心撮合
  * <p>
- * 这是新的撮合引擎核心。它完全在内存中运行，不涉及任何数据库IO。
- * 它消费日志处理器处理过的事件，执行订单匹配，并产生交易事件。
+ * 消费Disruptor事件，执行订单匹配或取消，并产生交易事件。
  * </p>
- *
- * @author Remus
- * @version 1.0
- * @since 2024/7/17 10:30
  */
 @Slf4j
 @Component
-public class MatchingHandler implements EventHandler<OrderEvent> {
+public class MatchingHandler implements EventHandler<DisruptorEvent> {
 
     private final Map<String, OrderBook> books = new ConcurrentHashMap<>();
+    private final SymbolService symbolService;
 
     private volatile Map<String, Map<String, List<OrderBookLevel>>> snapshotCache = new ConcurrentHashMap<>();
 
-    @Override
-    public void onEvent(OrderEvent event, long sequence, boolean endOfBatch) {
-        log.info("[Disruptor - Matching] 开始撮合事件: {}", event);
-
-        OrderBook orderBook = books.computeIfAbsent(event.getSymbol(), OrderBook::new);
-
-        OrderEntity order = OrderEntity.builder()
-                .id(event.getOrderId())
-                .userId(event.getUserId())
-                .symbol(event.getSymbol())
-                .price(event.getPrice())
-                .amount(event.getAmount())
-                .side(event.getSide())
-                .build();
-
-        // 核心撮合逻辑，会填充event中的tradeEvents列表
-        match(order, orderBook, event);
-
-        // 撮合逻辑执行完毕后，更新该交易对的订单簿快照
-        updateSnapshot(event.getSymbol(), orderBook);
+    public MatchingHandler(SymbolService symbolService) {
+        this.symbolService = symbolService;
     }
 
-    private void match(OrderEntity order, OrderBook orderBook, OrderEvent orderEvent) {
+    @Override
+    public void onEvent(DisruptorEvent event, long sequence, boolean endOfBatch) throws Exception {
+        switch (event.getType()) {
+            case PLACE_ORDER:
+                handlePlaceOrder(event);
+                break;
+            case CANCEL_ORDER:
+                handleCancelOrder(event);
+                break;
+            default:
+                log.warn("未知的事件类型: {}", event.getType());
+        }
+    }
+
+    private void handlePlaceOrder(DisruptorEvent event) {
+        OrderDto dto = event.getPlaceOrder();
+        log.info("[Disruptor - Matching] 开始处理下单事件: {}", dto);
+
+        OrderBook orderBook = books.computeIfAbsent(dto.getSymbol(), OrderBook::new);
+
+        OrderEntity order = OrderEntity.builder()
+                .id(event.getOrderId()) // 从DisruptorEvent中获取orderId
+                .userId(dto.getUserId())
+                .symbol(dto.getSymbol())
+                .price(dto.getPrice())
+                .amount(dto.getAmount())
+                .side(dto.getSide())
+                .build();
+
+        match(order, orderBook, event);
+        updateSnapshot(dto.getSymbol(), orderBook);
+    }
+
+    private void handleCancelOrder(DisruptorEvent event) {
+        CancelOrderDto dto = event.getCancelOrder();
+        log.info("[Disruptor - Matching] 开始处理取消订单事件: {}", dto);
+
+        OrderBook orderBook = books.get(dto.getSymbol());
+        if (orderBook == null) {
+            log.warn("尝试取消一个不存在的订单簿中的订单: {}", dto);
+            return;
+        }
+
+        boolean removed = orderBook.remove(dto.getOrderId(), dto.getSide());
+        if (removed) {
+            log.info("成功从内存订单簿中移除订单: {}", dto.getOrderId());
+            updateSnapshot(dto.getSymbol(), orderBook);
+        } else {
+            log.warn("尝试从订单簿中移除一个不存在的订单: {}", dto.getOrderId());
+        }
+    }
+
+    private void match(OrderEntity order, OrderBook orderBook, DisruptorEvent event) {
         boolean isBuy = order.getSide() == OrderTypes.Side.BUY;
 
         while (true) {
             Optional<Map.Entry<BigDecimal, Deque<OrderEntity>>> bestOpt =
                     isBuy ? orderBook.bestAsk() : orderBook.bestBid();
 
-            if (bestOpt.isEmpty()) {
-                break;
-            }
+            if (bestOpt.isEmpty()) break;
 
             BigDecimal price = bestOpt.get().getKey();
             if ((isBuy && order.getPrice().compareTo(price) < 0) ||
-                    (!isBuy && order.getPrice().compareTo(price) > 0)) {
-                break;
-            }
+                    (!isBuy && order.getPrice().compareTo(price) > 0)) break;
 
             Deque<OrderEntity> queue = bestOpt.get().getValue();
             OrderEntity counterOrder = queue.peekFirst();
@@ -81,7 +114,6 @@ public class MatchingHandler implements EventHandler<OrderEvent> {
 
             BigDecimal tradedQty = order.getRemaining().min(counterOrder.getRemaining());
 
-            // 创建并填充TradeEvent
             TradeEvent tradeEvent = TradeEvent.builder()
                     .symbol(order.getSymbol())
                     .price(price)
@@ -92,21 +124,17 @@ public class MatchingHandler implements EventHandler<OrderEvent> {
                     .sellerUserId(isBuy ? counterOrder.getUserId() : order.getUserId())
                     .build();
 
-            // 将成交事件添加到当前处理的OrderEvent中
-            orderEvent.addTradeEvent(tradeEvent);
+            event.addTradeEvent(tradeEvent);
             log.info("[Disruptor - Matching] 产生交易事件: {}", tradeEvent);
 
-            // 更新内存中的订单状态
             order.addFilled(tradedQty);
             counterOrder.addFilled(tradedQty);
 
             if (counterOrder.isFullyFilled()) {
-                orderBook.remove(counterOrder);
+                orderBook.remove(counterOrder.getId(), counterOrder.getSide());
             }
 
-            if (order.isFullyFilled()) {
-                break;
-            }
+            if (order.isFullyFilled()) break;
         }
 
         if (!order.isFullyFilled()) {

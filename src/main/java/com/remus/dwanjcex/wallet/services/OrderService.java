@@ -2,11 +2,13 @@ package com.remus.dwanjcex.wallet.services;
 
 import com.remus.dwanjcex.common.OrderStatus;
 import com.remus.dwanjcex.common.OrderTypes;
+import com.remus.dwanjcex.disruptor.event.OrderCancelEvent;
 import com.remus.dwanjcex.disruptor.event.OrderCreatedEvent;
 import com.remus.dwanjcex.disruptor.handler.MatchingHandler;
 import com.remus.dwanjcex.exception.BusinessException;
 import com.remus.dwanjcex.wallet.entity.OrderEntity;
 import com.remus.dwanjcex.wallet.entity.SymbolEntity;
+import com.remus.dwanjcex.wallet.entity.dto.CancelOrderDto;
 import com.remus.dwanjcex.wallet.entity.dto.OrderBookLevel;
 import com.remus.dwanjcex.wallet.entity.dto.OrderDto;
 import com.remus.dwanjcex.wallet.entity.result.ResultCode;
@@ -20,6 +22,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @Service
 @AllArgsConstructor
@@ -29,17 +32,15 @@ public class OrderService {
     private final WalletService walletService;
     private final SymbolService symbolService;
     private final MatchingHandler matchingHandler;
-    private final ApplicationEventPublisher eventPublisher; // 注入Spring事件发布器
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public OrderEntity placeOrder(OrderDto dto) throws RuntimeException {
-        // 1. 校验交易对是否存在
         SymbolEntity symbol = symbolService.getSymbol(dto.getSymbol());
         if (symbol == null) {
             throw new BusinessException(ResultCode.SYMBOL_NOT_SUPPORTED);
         }
 
-        // 2. 构建订单实体并初步入库，获取订单ID
         OrderEntity order = OrderEntity.builder()
                 .userId(dto.getUserId())
                 .symbol(dto.getSymbol())
@@ -50,7 +51,6 @@ public class OrderService {
                 .build();
         orderMapper.insert(order);
 
-        // 3. 冻结资金
         boolean freezeOk;
         if (dto.getSide() == OrderTypes.Side.BUY) {
             BigDecimal amountToFreeze = dto.getPrice().multiply(dto.getAmount()).setScale(symbol.getQuoteScale(), RoundingMode.HALF_UP);
@@ -61,28 +61,27 @@ public class OrderService {
             if (!freezeOk) throw new BusinessException(ResultCode.INSUFFICIENT_BASE);
         }
 
-        // 4. 发布一个Spring事件，通知订单已创建
-        // 这个事件将在当前事务成功提交后，由@TransactionalEventListener进行异步处理
+        // 注意：这里的dto是原始请求，order.getId()是新生成的ID
         eventPublisher.publishEvent(new OrderCreatedEvent(this, order.getId(), dto));
-
-        // 5. 立即返回，不等待撮合结果
         return order;
     }
-
     @Transactional
-    public void cancelOrder(Long orderId) throws RuntimeException {
+    public void cancelOrder( Long userId,Long orderId) throws RuntimeException {
         OrderEntity order = orderMapper.selectById(orderId);
-        if (order == null) throw new BusinessException(ResultCode.ORDER_NOT_FOUND);
-        // TODO: 实现订单取消逻辑。也需要通过Disruptor发布一个"取消事件"。
-        throw new UnsupportedOperationException("订单取消功能尚未接入Disruptor。");
+        if (order == null) {
+            throw new BusinessException(ResultCode.ORDER_NOT_FOUND);
+        }
+        if (!Objects.equals(order.getUserId(), userId)) {
+            throw new BusinessException(ResultCode.ORDER_NOT_BELONG_TO_USER);
+        }
+        if (order.getStatus() != OrderStatus.NEW && order.getStatus() != OrderStatus.PARTIAL) {
+            throw new BusinessException(ResultCode.ORDER_CANNOT_BE_CANCELED);
+        }
+        CancelOrderDto cancelDto = new CancelOrderDto(orderId, userId, order.getSymbol(), order.getSide());
+        eventPublisher.publishEvent(new OrderCancelEvent(this, cancelDto));
     }
 
-    /**
-     * 获取指定交易对订单簿快照。
-     * 此方法从MatchingHandler的缓存中无锁读取，性能极高。
-     */
     public Map<String, List<OrderBookLevel>> getOrderBook(String symbol){
         return matchingHandler.getOrderBookSnapshot(symbol);
     }
-
 }

@@ -2,6 +2,7 @@ package com.remus.dwanjcex;
 
 import com.remus.dwanjcex.common.CoinConstant;
 import com.remus.dwanjcex.common.OrderTypes;
+import com.remus.dwanjcex.wallet.entity.OrderEntity;
 import com.remus.dwanjcex.wallet.entity.Trade;
 import com.remus.dwanjcex.wallet.entity.dto.OrderBookLevel;
 import com.remus.dwanjcex.wallet.entity.dto.OrderDto;
@@ -22,6 +23,7 @@ import java.util.UUID;
 public class BuyTest {
 
     private static final String SYMBOL_BTC_USDT = "BTC/USDT";
+    private static final String SYMBOL_ETH_USDT = "ETH/USDT";
 
     @Resource
     private UserService userService;
@@ -36,7 +38,28 @@ public class BuyTest {
     private TradeService tradeService;
 
     @Test
-    public void t_buyBtc() throws InterruptedException {
+    public void t_cancelOrder(){
+        Long buyerId = userService.genUser("admin"+ UUID.randomUUID().toString().substring(0,5), "123");
+        System.out.println("Buyer ID: " + buyerId);
+        System.out.println("买方充值100W USD");
+        walletService.deposit(buyerId, CoinConstant.USDT, new BigDecimal("1000000"),"Deposit");
+        OrderDto buyOrder = new OrderDto();
+        buyOrder.setUserId(buyerId);
+        buyOrder.setSide(OrderTypes.Side.BUY);
+        buyOrder.setSymbol(SYMBOL_ETH_USDT);
+        buyOrder.setPrice(new BigDecimal("50000"));
+        buyOrder.setAmount(new BigDecimal("2"));
+        OrderEntity orderEntity = orderService.placeOrder(buyOrder);
+        System.out.println("取消前打印");
+        printOrderBook(SYMBOL_ETH_USDT);
+        System.out.println("准备取消");
+        orderService.cancelOrder(buyerId,orderEntity.getId());
+        System.out.println("取消后打印");
+        printOrderBook(SYMBOL_ETH_USDT);
+    }
+
+    @Test
+    public void t_buyBtc()  {
         // 1️⃣ 注册买方和卖方
         Long buyerId = userService.genUser("admin"+ UUID.randomUUID().toString().substring(0,5), "123");
         Long sellerId = userService.genUser("admin"+ UUID.randomUUID().toString().substring(0,5), "123");
@@ -78,7 +101,7 @@ public class BuyTest {
 
         // 3️⃣ 查看当前订单簿
 
-        printOrderBook();
+        printOrderBook(SYMBOL_BTC_USDT);
 
         // 4️⃣ 卖方下单卖 1 BTC，价格 50000 USD
         OrderDto sellOrder = new OrderDto();
@@ -86,11 +109,11 @@ public class BuyTest {
         sellOrder.setSide(OrderTypes.Side.SELL);
         sellOrder.setSymbol(SYMBOL_BTC_USDT);
         sellOrder.setPrice(new BigDecimal("50000"));
-        sellOrder.setAmount(new BigDecimal("2"));
+        sellOrder.setAmount(new BigDecimal("1"));
         orderService.placeOrder(sellOrder);
 
         System.out.println("Sell order placed: " + sellOrder);
-        printOrderBook();
+        printOrderBook(SYMBOL_BTC_USDT);
 //        卖方第二次下单卖 1 BTC，价格 50000 USD
         OrderDto sellOrder2 = new OrderDto();
         sellOrder2.setUserId(sellerId);
@@ -99,7 +122,7 @@ public class BuyTest {
         sellOrder2.setPrice(new BigDecimal("50000"));
         sellOrder2.setAmount(new BigDecimal("3"));
         orderService.placeOrder(sellOrder2);
-        printOrderBook();
+        printOrderBook(SYMBOL_BTC_USDT);
 
         Long buyerId2 = userService.genUser("admin"+ UUID.randomUUID().toString().substring(0,5), "123");
         System.out.println("买方充值100W USD");
@@ -111,7 +134,7 @@ public class BuyTest {
         buyOrder2.setPrice(new BigDecimal("50000"));
         buyOrder2.setAmount(new BigDecimal("3"));
         orderService.placeOrder(buyOrder2);
-        printOrderBook();
+        printOrderBook(SYMBOL_BTC_USDT);
         // 6️⃣ 查询买方和卖方的交易记录
         List<Trade> buyerTrades = tradeService.getTradesByUser(buyerId);
         List<Trade> sellerTrades = tradeService.getTradesByUser(sellerId);
@@ -134,16 +157,16 @@ public class BuyTest {
 
     }
 
-    private void printOrderBook() {
+    private void printOrderBook(String symbol) {
         // 等待Disruptor处理事件
         try {
-            Thread.sleep(3000L);
+            Thread.sleep(10000L);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
-        Map<String, List<OrderBookLevel>> orderBook = orderService.getOrderBook(SYMBOL_BTC_USDT);
+        Map<String, List<OrderBookLevel>> orderBook = orderService.getOrderBook(symbol);
 
-        System.out.println("\n==== Order Book (" + SYMBOL_BTC_USDT + ") ====");
+        System.out.println("\n==== Order Book (" + symbol + ") ====");
 
         // 打印卖盘 (Asks)
         List<OrderBookLevel> asks = orderBook.get("asks");

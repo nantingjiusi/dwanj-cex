@@ -1,15 +1,12 @@
 package com.remus.dwanjcex.wallet.entity.dto;
 
+import com.remus.dwanjcex.common.OrderTypes;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
  * 取消订单请求的数据传输对象。
- *
- * @author Remus
- * @version 1.0
- * @since 2024/7/18 16:05
  */
 @Data
 @NoArgsConstructor
@@ -25,4 +22,14 @@ public class CancelOrderDto {
      * 发起取消请求的用户ID
      */
     private Long userId;
+
+    /**
+     * 交易对，用于快速定位订单簿
+     */
+    private String symbol;
+
+    /**
+     * 订单的买卖方向，用于快速定位订单簿中的具体位置
+     */
+    private OrderTypes.Side side;
 }
