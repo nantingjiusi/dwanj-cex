@@ -1,14 +1,15 @@
 package com.remus.dwanjcex.engine;
 
 import com.remus.dwanjcex.common.OrderTypes;
-import com.remus.dwanjcex.common.SymbolEnum;
 import com.remus.dwanjcex.wallet.entity.OrderEntity;
+import com.remus.dwanjcex.wallet.entity.dto.OrderBookLevel;
 import lombok.Getter;
 
 import java.math.BigDecimal;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.stream.Collectors;
 
 /**
  * 单个交易对订单簿
@@ -21,9 +22,9 @@ public class OrderBook {
             new ConcurrentSkipListMap<>(BigDecimal::compareTo);
 
     @Getter
-    private final SymbolEnum symbol;
+    private final String symbol;
 
-    public OrderBook(SymbolEnum symbol) {
+    public OrderBook(String symbol) {
         this.symbol = symbol;
     }
 
@@ -59,21 +60,40 @@ public class OrderBook {
         return asks.isEmpty() ? Optional.empty() : Optional.of(asks.firstEntry());
     }
 
-    /** 获取订单簿快照 */
-    public Map<String, Map<BigDecimal, List<OrderEntity>>> getOrderBookSnapshot() {
-        Map<BigDecimal, List<OrderEntity>> bidSnapshot = bids.entrySet().stream()
-                .collect(LinkedHashMap::new,
-                        (m, e) -> m.put(e.getKey(), new ArrayList<>(e.getValue())),
-                        LinkedHashMap::putAll);
+    /**
+     * 获取订单簿的聚合深度快照。
+     * 返回的是按价格聚合后的深度信息，而不是原始订单列表。
+     *
+     * @return 包含"bids"和"asks"的深度列表的Map
+     */
+    public Map<String, List<OrderBookLevel>> getOrderBookSnapshot() {
+        Map<String, List<OrderBookLevel>> snapshot = new LinkedHashMap<>();
 
-        Map<BigDecimal, List<OrderEntity>> askSnapshot = asks.entrySet().stream()
-                .collect(LinkedHashMap::new,
-                        (m, e) -> m.put(e.getKey(), new ArrayList<>(e.getValue())),
-                        LinkedHashMap::putAll);
+        List<OrderBookLevel> bidLevels = bids.entrySet().stream()
+                .map(entry -> {
+                    BigDecimal price = entry.getKey();
+                    // 累加该价格下所有订单的剩余数量
+                    BigDecimal totalQuantity = entry.getValue().stream()
+                            .map(OrderEntity::getRemaining)
+                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    return new OrderBookLevel(price, totalQuantity);
+                })
+                .filter(level -> level.getQuantity().compareTo(BigDecimal.ZERO) > 0) // 过滤掉数量为0的深度
+                .collect(Collectors.toList());
 
-        Map<String, Map<BigDecimal, List<OrderEntity>>> snapshot = new LinkedHashMap<>();
-        snapshot.put("bids", bidSnapshot);
-        snapshot.put("asks", askSnapshot);
+        List<OrderBookLevel> askLevels = asks.entrySet().stream()
+                .map(entry -> {
+                    BigDecimal price = entry.getKey();
+                    BigDecimal totalQuantity = entry.getValue().stream()
+                            .map(OrderEntity::getRemaining)
+                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    return new OrderBookLevel(price, totalQuantity);
+                })
+                .filter(level -> level.getQuantity().compareTo(BigDecimal.ZERO) > 0)
+                .collect(Collectors.toList());
+
+        snapshot.put("bids", bidLevels);
+        snapshot.put("asks", askLevels);
         return snapshot;
     }
 }

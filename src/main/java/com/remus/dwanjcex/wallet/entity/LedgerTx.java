@@ -17,5 +17,5 @@ public class LedgerTx {
     private BigDecimal amount;
     private LedgerTxType type; // DEPOSIT, FREEZE, UNFREEZE, SETTLE_DEBIT, SETTLE_CREDIT
     private String ref;        // 关联单号，如订单ID
-    private LocalDateTime createdAt = LocalDateTime.now();
+    private LocalDateTime createdAt;
 }

@@ -7,15 +7,11 @@ spring:
     username: root
     password: 123456
     driver-class-name: com.mysql.cj.jdbc.Driver
-
-  mybatis:
-    mapper-locations: classpath:mapper/*.xml
-    type-aliases-package: com.remus.dwanjcex.wallet.entity
-    configuration:
-      map-underscore-to-camel-case: true
-      cache-enabled: true
-#      log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
-
+mybatis:
+  mapper-locations: classpath*:mapper/*.xml
+  type-aliases-package: com.remus.dwanjcex.wallet.entity
+  configuration:
+    map-underscore-to-camel-case: true
 data:
   redis:
     host: 127.0.0.1
@@ -49,5 +45,5 @@ springdoc:
 
 logging:
   level:
-    org.mybatis: error
-    com.remus.dwanjcex.wallet.mapper: error
+    org.mybatis: info
+    com.remus.dwanjcex.wallet.mapper: info

@@ -16,5 +16,5 @@ public class Trade {
     private String symbol;     // BTC/USDT
     private BigDecimal price;
     private BigDecimal quantity;
-    private LocalDateTime createdAt = LocalDateTime.now();
+    private LocalDateTime createdAt;
 }

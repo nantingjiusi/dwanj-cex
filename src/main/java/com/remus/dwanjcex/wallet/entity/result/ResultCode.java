@@ -12,7 +12,7 @@ public enum ResultCode {
     NO_FROZEN(1002, "没有冻结余额"),
     ORDER_NOT_FOUND(1003, "订单未找到"),
     INSUFFICIENT_QUOTE(1004, "报价币不足"),
-    INSUFFICIENT_BASE(1005, "基础币不足");
+    INSUFFICIENT_BASE(1005, "基础币不足"), SYMBOL_NOT_SUPPORTED(1007,"不支持该交易对" );
 
     private final int code;
     private final String message;

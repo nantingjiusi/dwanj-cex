@@ -1,10 +1,9 @@
 package com.remus.dwanjcex;
 
-import com.remus.dwanjcex.common.AssetEnum;
+import com.remus.dwanjcex.common.CoinConstant;
 import com.remus.dwanjcex.common.OrderTypes;
-import com.remus.dwanjcex.common.SymbolEnum;
-import com.remus.dwanjcex.wallet.entity.OrderEntity;
 import com.remus.dwanjcex.wallet.entity.Trade;
+import com.remus.dwanjcex.wallet.entity.dto.OrderBookLevel;
 import com.remus.dwanjcex.wallet.entity.dto.OrderDto;
 import com.remus.dwanjcex.wallet.services.OrderService;
 import com.remus.dwanjcex.wallet.services.TradeService;
@@ -22,6 +21,7 @@ import java.util.UUID;
 @SpringBootTest
 public class BuyTest {
 
+    private static final String SYMBOL_BTC_USDT = "BTC/USDT";
 
     @Resource
     private UserService userService;
@@ -36,7 +36,7 @@ public class BuyTest {
     private TradeService tradeService;
 
     @Test
-    public void t_buyBtc(){
+    public void t_buyBtc() throws InterruptedException {
         // 1️⃣ 注册买方和卖方
         Long buyerId = userService.genUser("admin"+ UUID.randomUUID().toString().substring(0,5), "123");
         Long sellerId = userService.genUser("admin"+ UUID.randomUUID().toString().substring(0,5), "123");
@@ -45,105 +45,123 @@ public class BuyTest {
         System.out.println("Seller ID: " + sellerId);
 
         //买方充值100W USD
+        System.out.println("买方充值100W USD");
+        walletService.deposit(buyerId, CoinConstant.USDT, new BigDecimal("1000000"),"Deposit");
+        System.out.println("Buyer BTC balance: " + walletService.getBalance(buyerId, CoinConstant.BTC));
+        System.out.println("Buyer USDT balance: " + walletService.getBalance(buyerId, CoinConstant.USDT));
+        System.out.println("Seller USD balance: " + walletService.getBalance(sellerId, CoinConstant.USDT));
+        System.out.println("Seller BTC balance: " + walletService.getBalance(sellerId, CoinConstant.BTC));
 
-        walletService.deposit(buyerId,AssetEnum.USDT, new BigDecimal("1000000"),"Deposit");
+
 
         //卖方充值50BTC
-        walletService.deposit(sellerId,AssetEnum.BTC,new BigDecimal("50"),"Deposit");
-        // 2️⃣ 买方下单买 1 BTC，价格 50000 USD
+        walletService.deposit(sellerId,CoinConstant.BTC,new BigDecimal("50"),"Deposit");
+        System.out.println("Buyer BTC balance: " + walletService.getBalance(buyerId, CoinConstant.BTC));
+        System.out.println("Buyer USDT balance: " + walletService.getBalance(buyerId, CoinConstant.USDT));
+        System.out.println("Seller USD balance: " + walletService.getBalance(sellerId, CoinConstant.USDT));
+        System.out.println("Seller BTC balance: " + walletService.getBalance(sellerId, CoinConstant.BTC));
+
+        // 2️⃣ 买方下单买 2 BTC，价格 50000 USD
+
         OrderDto buyOrder = new OrderDto();
         buyOrder.setUserId(buyerId);
         buyOrder.setSide(OrderTypes.Side.BUY);
-        buyOrder.setSymbol(SymbolEnum.BTC_USDT);
+        buyOrder.setSymbol(SYMBOL_BTC_USDT);
         buyOrder.setPrice(new BigDecimal("50000"));
         buyOrder.setAmount(new BigDecimal("2"));
         orderService.placeOrder(buyOrder);
 
+
+
+
         System.out.println("Buy order placed: " + buyOrder);
 
         // 3️⃣ 查看当前订单簿
-        Map<String, Map<BigDecimal, List<OrderEntity>>> orderBook = orderService.getOrderBook(SymbolEnum.BTC_USDT);
-        System.out.println("Order Book:");
-        printOrderBook(orderBook);
+
+        printOrderBook();
 
         // 4️⃣ 卖方下单卖 1 BTC，价格 50000 USD
         OrderDto sellOrder = new OrderDto();
         sellOrder.setUserId(sellerId);
         sellOrder.setSide(OrderTypes.Side.SELL);
-        sellOrder.setSymbol(SymbolEnum.BTC_USDT);
+        sellOrder.setSymbol(SYMBOL_BTC_USDT);
         sellOrder.setPrice(new BigDecimal("50000"));
-        sellOrder.setAmount(new BigDecimal("1"));
+        sellOrder.setAmount(new BigDecimal("2"));
         orderService.placeOrder(sellOrder);
 
         System.out.println("Sell order placed: " + sellOrder);
-
+        printOrderBook();
 //        卖方第二次下单卖 1 BTC，价格 50000 USD
         OrderDto sellOrder2 = new OrderDto();
         sellOrder2.setUserId(sellerId);
         sellOrder2.setSide(OrderTypes.Side.SELL);
-        sellOrder2.setSymbol(SymbolEnum.BTC_USDT);
+        sellOrder2.setSymbol(SYMBOL_BTC_USDT);
         sellOrder2.setPrice(new BigDecimal("50000"));
-        sellOrder2.setAmount(new BigDecimal("1"));
+        sellOrder2.setAmount(new BigDecimal("3"));
         orderService.placeOrder(sellOrder2);
+        printOrderBook();
 
-        // 5️⃣ 撮合成交（如果你的系统是自动撮合，这一步可能是内部逻辑）
-//        matchingEngine.matchOrder("BTC");
-
+        Long buyerId2 = userService.genUser("admin"+ UUID.randomUUID().toString().substring(0,5), "123");
+        System.out.println("买方充值100W USD");
+        walletService.deposit(buyerId2, CoinConstant.USDT, new BigDecimal("1000000"),"Deposit");
+        OrderDto buyOrder2 = new OrderDto();
+        buyOrder2.setUserId(buyerId2);
+        buyOrder2.setSide(OrderTypes.Side.BUY);
+        buyOrder2.setSymbol(SYMBOL_BTC_USDT);
+        buyOrder2.setPrice(new BigDecimal("50000"));
+        buyOrder2.setAmount(new BigDecimal("3"));
+        orderService.placeOrder(buyOrder2);
+        printOrderBook();
         // 6️⃣ 查询买方和卖方的交易记录
         List<Trade> buyerTrades = tradeService.getTradesByUser(buyerId);
         List<Trade> sellerTrades = tradeService.getTradesByUser(sellerId);
-
+        List<Trade> buyerTrades2 = tradeService.getTradesByUser(buyerId2);
         System.out.println("Buyer trades:");
         buyerTrades.forEach(System.out::println);
 
         System.out.println("Seller trades:");
         sellerTrades.forEach(System.out::println);
 
+        System.out.println("Buyer trades2:");
+        buyerTrades2.forEach(System.out::println);
+
+        System.out.println("===============================");
         // 7️⃣ 查询买卖双方余额（可选）
-        System.out.println("Buyer BTC balance: " + walletService.getBalance(buyerId, AssetEnum.BTC));
-        System.out.println("Seller USD balance: " + walletService.getBalance(sellerId, AssetEnum.USDT));
+        System.out.println("Buyer BTC balance: " + walletService.getBalance(buyerId, CoinConstant.BTC));
+        System.out.println("Buyer USDT balance: " + walletService.getBalance(buyerId, CoinConstant.USDT));
+        System.out.println("Seller USD balance: " + walletService.getBalance(sellerId, CoinConstant.USDT));
+        System.out.println("Seller BTC balance: " + walletService.getBalance(sellerId, CoinConstant.BTC));
 
     }
 
-    private void printOrderBook(Map<String, Map<BigDecimal, List<OrderEntity>>> orderBook) {
-        System.out.println("==== Order Book ====");
-
-        // 打印买盘
-        Map<BigDecimal, List<OrderEntity>> bids = orderBook.get("bids");
-        System.out.println("Bids:");
-        if (bids != null && !bids.isEmpty()) {
-            bids.entrySet().stream()
-                    .sorted((e1, e2) -> e2.getKey().compareTo(e1.getKey())) // 买盘降序
-                    .forEach(entry -> {
-                        BigDecimal price = entry.getKey();
-                        BigDecimal totalQty = entry.getValue().stream()
-                                .map(OrderEntity::getAmount)
-                                .reduce(BigDecimal.ZERO, BigDecimal::add);
-                        System.out.println("Price: " + price + ", Total Qty: " + totalQty
-                                + ", Orders: " + entry.getValue().size());
-                    });
-        } else {
-            System.out.println("No bids");
+    private void printOrderBook() {
+        // 等待Disruptor处理事件
+        try {
+            Thread.sleep(3000L);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         }
+        Map<String, List<OrderBookLevel>> orderBook = orderService.getOrderBook(SYMBOL_BTC_USDT);
 
-        // 打印卖盘
-        Map<BigDecimal, List<OrderEntity>> asks = orderBook.get("asks");
-        System.out.println("Asks:");
+        System.out.println("\n==== Order Book (" + SYMBOL_BTC_USDT + ") ====");
+
+        // 打印卖盘 (Asks)
+        List<OrderBookLevel> asks = orderBook.get("asks");
+        System.out.println("Asks (卖盘):");
         if (asks != null && !asks.isEmpty()) {
-            asks.entrySet().stream()
-                    .sorted(Map.Entry.comparingByKey()) // 卖盘升序
-                    .forEach(entry -> {
-                        BigDecimal price = entry.getKey();
-                        BigDecimal totalQty = entry.getValue().stream()
-                                .map(OrderEntity::getAmount)
-                                .reduce(BigDecimal.ZERO, BigDecimal::add);
-                        System.out.println("Price: " + price + ", Total Qty: " + totalQty
-                                + ", Orders: " + entry.getValue().size());
-                    });
+            asks.forEach(level -> System.out.println("  Price: " + level.getPrice() + ", Quantity: " + level.getQuantity()));
         } else {
-            System.out.println("No asks");
+            System.out.println("  (empty)");
         }
 
-        System.out.println("====================");
+        // 打印买盘 (Bids)
+        List<OrderBookLevel> bids = orderBook.get("bids");
+        System.out.println("Bids (买盘):");
+        if (bids != null && !bids.isEmpty()) {
+            bids.forEach(level -> System.out.println("  Price: " + level.getPrice() + ", Quantity: " + level.getQuantity()));
+        } else {
+            System.out.println("  (empty)");
+        }
+        System.out.println("========================\n");
     }
 }

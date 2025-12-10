@@ -16,6 +16,6 @@ public interface TradeMapper {
     void insert(Trade trade);
 //    void insertBatch(List<Trade> trades);
 //    List<Trade> selectBySymbol(String symbol);
-    @Select("SELECT * FROM trade WHERE buy_order_id = #{userId}")
+    @Select("select t1.id,t1.symbol,t1.price,t1.quantity,t1.created_at,t2.user_id,t2.side from trade t1 join orders t2 where (t1.buy_order_id = t2.id or t1.sell_order_id = t2.id) and t2.user_id = #{userId}")
     List<Trade> selectByUserId(Long userId);
 }

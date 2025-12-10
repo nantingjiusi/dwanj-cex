@@ -2,7 +2,6 @@ package com.remus.dwanjcex.wallet.entity;
 
 import com.remus.dwanjcex.common.OrderStatus;
 import com.remus.dwanjcex.common.OrderTypes;
-import com.remus.dwanjcex.common.SymbolEnum;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -19,7 +18,7 @@ import java.time.LocalDateTime;
 public class OrderEntity {
     private Long id;
     private Long userId;
-    private SymbolEnum symbol;        // BTC/USDT
+    private String symbol;        // BTC/USDT
     private BigDecimal price;
     private BigDecimal amount;
     private BigDecimal filled = BigDecimal.ZERO;
