@@ -22,8 +22,8 @@ import java.util.UUID;
 @SpringBootTest
 public class BuyTest {
 
-    private static final String SYMBOL_BTC_USDT = "BTC/USDT";
-    private static final String SYMBOL_ETH_USDT = "ETH/USDT";
+    private static final String SYMBOL_BTC_USDT = "BTCUSDT";
+    private static final String SYMBOL_ETH_USDT = "ETHUSDT";
 
     @Resource
     private UserService userService;

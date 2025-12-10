@@ -61,12 +61,12 @@ public class OrderService {
             if (!freezeOk) throw new BusinessException(ResultCode.INSUFFICIENT_BASE);
         }
 
-        // 注意：这里的dto是原始请求，order.getId()是新生成的ID
         eventPublisher.publishEvent(new OrderCreatedEvent(this, order.getId(), dto));
         return order;
     }
+
     @Transactional
-    public void cancelOrder( Long userId,Long orderId) throws RuntimeException {
+    public void cancelOrder(Long userId, Long orderId) throws RuntimeException {
         OrderEntity order = orderMapper.selectById(orderId);
         if (order == null) {
             throw new BusinessException(ResultCode.ORDER_NOT_FOUND);
@@ -77,11 +77,21 @@ public class OrderService {
         if (order.getStatus() != OrderStatus.NEW && order.getStatus() != OrderStatus.PARTIAL) {
             throw new BusinessException(ResultCode.ORDER_CANNOT_BE_CANCELED);
         }
+
         CancelOrderDto cancelDto = new CancelOrderDto(orderId, userId, order.getSymbol(), order.getSide());
         eventPublisher.publishEvent(new OrderCancelEvent(this, cancelDto));
     }
 
     public Map<String, List<OrderBookLevel>> getOrderBook(String symbol){
         return matchingHandler.getOrderBookSnapshot(symbol);
+    }
+
+    /**
+     * 获取指定用户的所有订单。
+     * @param userId 用户ID
+     * @return 订单列表
+     */
+    public List<OrderEntity> getMyOrders(Long userId) {
+        return orderMapper.selectByUserId(userId);
     }
 }

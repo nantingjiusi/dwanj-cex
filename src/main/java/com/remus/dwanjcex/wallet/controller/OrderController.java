@@ -9,8 +9,10 @@ import com.remus.dwanjcex.wallet.entity.result.ResultCode;
 import com.remus.dwanjcex.wallet.services.OrderService;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
-@RequestMapping("/api/order") // 将路径移动到/api/下，以被JWT过滤器保护
+@RequestMapping("/api/order")
 public class OrderController {
 
     private final OrderService orderService;
@@ -22,13 +24,10 @@ public class OrderController {
     @PostMapping("/place")
     public ResponseResult<?> place(@RequestBody OrderDto dto) {
         try {
-            // 从UserContextHolder获取当前登录的用户ID
             Long currentUserId = UserContextHolder.getCurrentUserId();
             if (currentUserId == null) {
-                // 这通常意味着JWT无效或未提供
                 return ResponseResult.error(ResultCode.UNAUTHORIZED);
             }
-            // 将DTO中的userId强制设置为当前登录的用户ID，防止伪造
             dto.setUserId(currentUserId);
             OrderEntity order = orderService.placeOrder(dto);
             return ResponseResult.success(order);
@@ -40,17 +39,24 @@ public class OrderController {
     @PostMapping("/cancel/{orderId}")
     public ResponseResult<?> cancel(@PathVariable Long orderId) {
         try {
-            // 从UserContextHolder获取当前登录的用户ID
             Long currentUserId = UserContextHolder.getCurrentUserId();
             if (currentUserId == null) {
                 return ResponseResult.error(ResultCode.UNAUTHORIZED);
             }
-
-            // 将用户ID传递给service层进行权限校验
             orderService.cancelOrder(currentUserId, orderId);
             return ResponseResult.success();
         } catch (BusinessException e) {
             return ResponseResult.error(e.getResultCode());
         }
+    }
+
+    @GetMapping("/my-orders")
+    public ResponseResult<List<OrderEntity>> getMyOrders() {
+        Long currentUserId = UserContextHolder.getCurrentUserId();
+        if (currentUserId == null) {
+            return ResponseResult.error(ResultCode.UNAUTHORIZED);
+        }
+        List<OrderEntity> orders = orderService.getMyOrders(currentUserId);
+        return ResponseResult.success(orders);
     }
 }

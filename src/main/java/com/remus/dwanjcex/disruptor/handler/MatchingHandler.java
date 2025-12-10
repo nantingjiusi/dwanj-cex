@@ -9,145 +9,179 @@ import com.remus.dwanjcex.wallet.entity.OrderEntity;
 import com.remus.dwanjcex.wallet.entity.dto.CancelOrderDto;
 import com.remus.dwanjcex.wallet.entity.dto.OrderBookLevel;
 import com.remus.dwanjcex.wallet.entity.dto.OrderDto;
-import com.remus.dwanjcex.wallet.services.SymbolService;
+import com.remus.dwanjcex.websocket.event.OrderBookUpdateEvent;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.util.Collections;
-import java.util.Deque;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * 事件处理器 - 核心撮合
- * <p>
- * 消费Disruptor事件，执行订单匹配或取消，并产生交易事件。
- * </p>
- */
 @Slf4j
 @Component
 public class MatchingHandler implements EventHandler<DisruptorEvent> {
 
     private final Map<String, OrderBook> books = new ConcurrentHashMap<>();
-    private final SymbolService symbolService;
+    private final ApplicationEventPublisher eventPublisher;
 
     private volatile Map<String, Map<String, List<OrderBookLevel>>> snapshotCache = new ConcurrentHashMap<>();
 
-    public MatchingHandler(SymbolService symbolService) {
-        this.symbolService = symbolService;
+    public MatchingHandler(ApplicationEventPublisher eventPublisher) {
+        this.eventPublisher = eventPublisher;
     }
 
     @Override
-    public void onEvent(DisruptorEvent event, long sequence, boolean endOfBatch) throws Exception {
+    public void onEvent(DisruptorEvent event, long sequence, boolean endOfBatch) {
+        String symbolToUpdate = null;
         switch (event.getType()) {
             case PLACE_ORDER:
-                handlePlaceOrder(event);
+                symbolToUpdate = handlePlaceOrder(event);
                 break;
             case CANCEL_ORDER:
-                handleCancelOrder(event);
+                symbolToUpdate = handleCancelOrder(event);
                 break;
             default:
                 log.warn("未知的事件类型: {}", event.getType());
         }
+
+        if (symbolToUpdate != null) {
+            OrderBook orderBook = books.get(symbolToUpdate);
+            if (orderBook != null) {
+                updateSnapshotAndPublish(symbolToUpdate, orderBook);
+            }
+        }
     }
 
-    private void handlePlaceOrder(DisruptorEvent event) {
+    private String handlePlaceOrder(DisruptorEvent event) {
         OrderDto dto = event.getPlaceOrder();
-        log.info("[Disruptor - Matching] 开始处理下单事件: {}", dto);
-
         OrderBook orderBook = books.computeIfAbsent(dto.getSymbol(), OrderBook::new);
-
         OrderEntity order = OrderEntity.builder()
-                .id(event.getOrderId()) // 从DisruptorEvent中获取orderId
+                .id(event.getOrderId())
                 .userId(dto.getUserId())
                 .symbol(dto.getSymbol())
                 .price(dto.getPrice())
                 .amount(dto.getAmount())
                 .side(dto.getSide())
                 .build();
-
         match(order, orderBook, event);
-        updateSnapshot(dto.getSymbol(), orderBook);
+        return dto.getSymbol();
     }
 
-    private void handleCancelOrder(DisruptorEvent event) {
+    private String handleCancelOrder(DisruptorEvent event) {
         CancelOrderDto dto = event.getCancelOrder();
-        log.info("[Disruptor - Matching] 开始处理取消订单事件: {}", dto);
-
         OrderBook orderBook = books.get(dto.getSymbol());
-        if (orderBook == null) {
-            log.warn("尝试取消一个不存在的订单簿中的订单: {}", dto);
-            return;
+        if (orderBook == null) return null;
+        if (orderBook.remove(dto.getOrderId())) {
+            return dto.getSymbol();
         }
-
-        boolean removed = orderBook.remove(dto.getOrderId(), dto.getSide());
-        if (removed) {
-            log.info("成功从内存订单簿中移除订单: {}", dto.getOrderId());
-            updateSnapshot(dto.getSymbol(), orderBook);
-        } else {
-            log.warn("尝试从订单簿中移除一个不存在的订单: {}", dto.getOrderId());
-        }
+        return null;
     }
 
     private void match(OrderEntity order, OrderBook orderBook, DisruptorEvent event) {
-        boolean isBuy = order.getSide() == OrderTypes.Side.BUY;
-
-        while (true) {
-            Optional<Map.Entry<BigDecimal, Deque<OrderEntity>>> bestOpt =
-                    isBuy ? orderBook.bestAsk() : orderBook.bestBid();
-
-            if (bestOpt.isEmpty()) break;
-
-            BigDecimal price = bestOpt.get().getKey();
-            if ((isBuy && order.getPrice().compareTo(price) < 0) ||
-                    (!isBuy && order.getPrice().compareTo(price) > 0)) break;
-
-            Deque<OrderEntity> queue = bestOpt.get().getValue();
-            OrderEntity counterOrder = queue.peekFirst();
-            if (counterOrder == null) {
-                log.warn("队列为空，但价格存在于订单簿中: {}", price);
-                break;
-            }
-
-            BigDecimal tradedQty = order.getRemaining().min(counterOrder.getRemaining());
-
-            TradeEvent tradeEvent = TradeEvent.builder()
-                    .symbol(order.getSymbol())
-                    .price(price)
-                    .quantity(tradedQty)
-                    .buyOrderId(isBuy ? order.getId() : counterOrder.getId())
-                    .sellOrderId(isBuy ? counterOrder.getId() : order.getId())
-                    .buyerUserId(isBuy ? order.getUserId() : counterOrder.getUserId())
-                    .sellerUserId(isBuy ? counterOrder.getUserId() : order.getUserId())
-                    .build();
-
-            event.addTradeEvent(tradeEvent);
-            log.info("[Disruptor - Matching] 产生交易事件: {}", tradeEvent);
-
-            order.addFilled(tradedQty);
-            counterOrder.addFilled(tradedQty);
-
-            if (counterOrder.isFullyFilled()) {
-                orderBook.remove(counterOrder.getId(), counterOrder.getSide());
-            }
-
-            if (order.isFullyFilled()) break;
+        if (order.getSide() == OrderTypes.Side.BUY) {
+            matchBuyOrder(order, orderBook, event);
+        } else {
+            matchSellOrder(order, orderBook, event);
         }
 
-        if (!order.isFullyFilled()) {
+        if (!event.isSelfTradeCancel() && !order.isFullyFilled()) {
             orderBook.add(order);
         }
     }
 
-    private void updateSnapshot(String symbol, OrderBook orderBook) {
+    private void matchBuyOrder(OrderEntity buyOrder, OrderBook orderBook, DisruptorEvent event) {
+        while (buyOrder.getRemaining().compareTo(BigDecimal.ZERO) > 0) {
+            Optional<Map.Entry<BigDecimal, Deque<OrderEntity>>> bestAskOpt = orderBook.bestAsk();
+            if (bestAskOpt.isEmpty()) break;
+
+            BigDecimal bestAskPrice = bestAskOpt.get().getKey();
+            if (buyOrder.getPrice().compareTo(bestAskPrice) < 0) break;
+
+            Deque<OrderEntity> askQueue = bestAskOpt.get().getValue();
+            OrderEntity sellOrder = askQueue.peekFirst();
+
+            if (sellOrder == null) {
+                orderBook.removePriceLevelIfEmpty(OrderTypes.Side.SELL, bestAskPrice);
+                continue;
+            }
+
+            if (buyOrder.getUserId().equals(sellOrder.getUserId())) {
+                log.warn("检测到自成交! 新买单 {} 将被取消。", buyOrder.getId());
+                event.setSelfTradeCancel(true);
+                return;
+            }
+
+            BigDecimal tradedQty = buyOrder.getRemaining().min(sellOrder.getRemaining());
+            TradeEvent tradeEvent = createTradeEvent(buyOrder, sellOrder, bestAskPrice, tradedQty);
+            event.addTradeEvent(tradeEvent);
+
+            buyOrder.addFilled(tradedQty);
+            sellOrder.addFilled(tradedQty);
+
+            if (sellOrder.isFullyFilled()) {
+                askQueue.pollFirst();
+                orderBook.remove(sellOrder.getId());
+            }
+            orderBook.removePriceLevelIfEmpty(OrderTypes.Side.SELL, bestAskPrice);
+        }
+    }
+
+    private void matchSellOrder(OrderEntity sellOrder, OrderBook orderBook, DisruptorEvent event) {
+        while (sellOrder.getRemaining().compareTo(BigDecimal.ZERO) > 0) {
+            Optional<Map.Entry<BigDecimal, Deque<OrderEntity>>> bestBidOpt = orderBook.bestBid();
+            if (bestBidOpt.isEmpty()) break;
+
+            BigDecimal bestBidPrice = bestBidOpt.get().getKey();
+            if (sellOrder.getPrice().compareTo(bestBidPrice) > 0) break;
+
+            Deque<OrderEntity> bidQueue = bestBidOpt.get().getValue();
+            OrderEntity buyOrder = bidQueue.peekFirst();
+
+            if (buyOrder == null) {
+                orderBook.removePriceLevelIfEmpty(OrderTypes.Side.BUY, bestBidPrice);
+                continue;
+            }
+
+            if (sellOrder.getUserId().equals(buyOrder.getUserId())) {
+                log.warn("检测到自成交! 新卖单 {} 将被取消。", sellOrder.getId());
+                event.setSelfTradeCancel(true);
+                return;
+            }
+
+            BigDecimal tradedQty = sellOrder.getRemaining().min(buyOrder.getRemaining());
+            TradeEvent tradeEvent = createTradeEvent(buyOrder, sellOrder, bestBidPrice, tradedQty);
+            event.addTradeEvent(tradeEvent);
+
+            sellOrder.addFilled(tradedQty);
+            buyOrder.addFilled(tradedQty);
+
+            if (buyOrder.isFullyFilled()) {
+                bidQueue.pollFirst();
+                orderBook.remove(buyOrder.getId());
+            }
+            orderBook.removePriceLevelIfEmpty(OrderTypes.Side.BUY, bestBidPrice);
+        }
+    }
+
+    private TradeEvent createTradeEvent(OrderEntity buyOrder, OrderEntity sellOrder, BigDecimal price, BigDecimal quantity) {
+        return TradeEvent.builder()
+                .symbol(buyOrder.getSymbol())
+                .price(price)
+                .quantity(quantity)
+                .buyOrderId(buyOrder.getId())
+                .sellOrderId(sellOrder.getId())
+                .buyerUserId(buyOrder.getUserId())
+                .sellerUserId(sellOrder.getUserId())
+                .build();
+    }
+
+    private void updateSnapshotAndPublish(String symbol, OrderBook orderBook) {
         Map<String, List<OrderBookLevel>> snapshot = orderBook.getOrderBookSnapshot();
         Map<String, Map<String, List<OrderBookLevel>>> newCache = new ConcurrentHashMap<>(this.snapshotCache);
         newCache.put(symbol, snapshot);
         this.snapshotCache = newCache;
-        log.trace("更新了 {} 的订单簿快照。", symbol);
+        eventPublisher.publishEvent(new OrderBookUpdateEvent(this, symbol, snapshot));
     }
 
     public Map<String, List<OrderBookLevel>> getOrderBookSnapshot(String symbol) {

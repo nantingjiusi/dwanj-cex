@@ -16,7 +16,7 @@ public class DisruptorEvent {
     private EventType type;
 
     // PLACE_ORDER 事件相关字段
-    private Long orderId; // 数据库中的订单ID
+    private Long orderId;
     private OrderDto placeOrder;
 
     // CANCEL_ORDER 事件相关字段
@@ -25,11 +25,19 @@ public class DisruptorEvent {
     // 撮合结果
     private List<TradeEvent> tradeEvents;
 
+    /**
+     * 自成交取消标志。
+     * 如果在撮合时发现新订单会与自己的订单成交，则将此标志设为true。
+     * PersistenceHandler会根据此标志来取消新订单并解冻资金。
+     */
+    private boolean selfTradeCancel = false;
+
     public void clear() {
         this.type = null;
         this.orderId = null;
         this.placeOrder = null;
         this.cancelOrder = null;
+        this.selfTradeCancel = false; // 重置标志
         if (this.tradeEvents != null) {
             this.tradeEvents.clear();
         }

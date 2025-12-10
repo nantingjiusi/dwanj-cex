@@ -9,10 +9,6 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 
 /**
  * WebSocket相关配置。
- *
- * @author Remus
- * @version 1.0
- * @since 2024/7/18 20:10
  */
 @Configuration
 @EnableWebSocket
@@ -23,7 +19,8 @@ public class WebSocketConfig implements WebSocketConfigurer {
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        registry.addHandler(orderBookWebSocketHandler, "/ws/v1") // 将处理器注册到/ws/v1路径
-                .setAllowedOrigins("*"); // 允许所有来源的跨域连接，生产环境中应配置为您的前端域名
+        registry.addHandler(orderBookWebSocketHandler, "/ws/v1")
+                // 移除了JWT握手拦截器
+                .setAllowedOrigins("*");
     }
 }

@@ -2,6 +2,7 @@ package com.remus.dwanjcex.websocket;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.remus.dwanjcex.config.jwt.JwtUtils;
 import com.remus.dwanjcex.disruptor.handler.MatchingHandler;
 import com.remus.dwanjcex.wallet.entity.dto.OrderBookLevel;
 import com.remus.dwanjcex.websocket.dto.WebSocketPushMessage;
@@ -9,6 +10,7 @@ import com.remus.dwanjcex.websocket.dto.WebSocketRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -18,9 +20,6 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 处理订单簿WebSocket连接和消息的处理器。
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -29,10 +28,12 @@ public class OrderBookWebSocketHandler extends TextWebSocketHandler {
     private final WebSocketPushService pushService;
     private final MatchingHandler matchingHandler;
     private final ObjectMapper objectMapper;
+    private final JwtUtils jwtUtils;
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        log.info("WebSocket连接已建立: {}", session.getId());
+        log.info("WebSocket连接已建立 (匿名): {}", session.getId());
+        // 连接建立时是匿名的，等待客户端发送auth请求
     }
 
     @Override
@@ -56,33 +57,47 @@ public class OrderBookWebSocketHandler extends TextWebSocketHandler {
         }
 
         String op = request.getOp().toLowerCase();
-        for (String arg : request.getArgs()) {
-            if ("subscribe".equals(op)) {
-                // 订阅主题
+        String arg = request.getArgs().get(0);
+
+        switch (op) {
+            case "subscribe":
                 pushService.subscribe(arg, session);
-                // 订阅后，立即发送一次最新的全量快照
                 sendInitialSnapshot(session, arg);
-            } else if ("unsubscribe".equals(op)) {
-                // 取消订阅
+                break;
+            case "unsubscribe":
                 // pushService.unsubscribe(arg, session); // 如果需要按主题取消
-            } else {
+                break;
+            case "auth":
+                handleAuth(session, arg);
+                break;
+            default:
                 log.warn("不支持的操作: {}", op);
-            }
+                session.sendMessage(new TextMessage("{\"error\": \"Unsupported operation\"}"));
         }
     }
 
-    /**
-     * 发送初始的全量订单簿快照。
-     */
+    private void handleAuth(WebSocketSession session, String token) throws IOException {
+        if (StringUtils.hasText(token) && jwtUtils.validateToken(token)) {
+            try {
+                Long userId = jwtUtils.getUserIdFromToken(token);
+                pushService.registerUserSession(userId, session);
+                session.sendMessage(new TextMessage("{\"event\": \"auth\", \"status\": \"success\"}"));
+            } catch (Exception e) {
+                log.warn("WebSocket认证失败：无效的Token", e);
+                session.sendMessage(new TextMessage("{\"event\": \"auth\", \"status\": \"failed\", \"message\": \"Invalid token\"}"));
+            }
+        } else {
+            session.sendMessage(new TextMessage("{\"event\": \"auth\", \"status\": \"failed\", \"message\": \"Token is missing or invalid\"}"));
+        }
+    }
+
     private void sendInitialSnapshot(WebSocketSession session, String topic) throws IOException {
-        // topic格式为 "orderbook:BTCUSDT"
         String[] parts = topic.split(":");
         if (parts.length != 2 || !"orderbook".equals(parts[0])) {
             return;
         }
         String symbol = parts[1];
 
-        // 从MatchingHandler的缓存中获取最新的快照
         Map<String, List<OrderBookLevel>> snapshot = matchingHandler.getOrderBookSnapshot(symbol);
 
         if (snapshot != null && !snapshot.isEmpty()) {
@@ -96,7 +111,6 @@ public class OrderBookWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         log.info("WebSocket连接已关闭: {}, 状态: {}", session.getId(), status);
-        // 清理该会话的所有订阅
         pushService.unsubscribe(session);
     }
 

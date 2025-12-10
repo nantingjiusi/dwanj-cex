@@ -1,5 +1,6 @@
 package com.remus.dwanjcex.wallet.controller;
 
+import com.remus.dwanjcex.config.jwt.UserContextHolder;
 import com.remus.dwanjcex.wallet.entity.UserBalance;
 import com.remus.dwanjcex.wallet.entity.dto.WalletDto;
 import com.remus.dwanjcex.wallet.entity.result.ResponseResult;
@@ -11,7 +12,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("/wallet")
+@RequestMapping("/api/wallet") // 移动到/api/下以受JWT保护
 public class WalletController {
     private final WalletService walletService;
     private final UserBalanceMapper balanceMapper;
@@ -33,15 +34,12 @@ public class WalletController {
         return ok ? ResponseResult.success("frozen") : ResponseResult.error(ResultCode.INSUFFICIENT_BALANCE,"insufficient_balance");
     }
 
-    @PostMapping("/unfreeze")
-    public ResponseResult<String> unfreeze(@RequestBody WalletDto dto) {
-        boolean ok = walletService.unfreeze(dto.getUserId(), dto.getAsset(), dto.getAmount(), dto.getRef());
-        return ok ? ResponseResult.success("unfrozen") : ResponseResult.error(ResultCode.NO_FROZEN,"no_frozen");
-    }
 
-    @GetMapping("/balances/{userId}")
-    public ResponseResult<List<UserBalance>> balances(@PathVariable Long userId) {
+
+
+    @GetMapping("/balances")
+    public ResponseResult<List<UserBalance>> balances() {
+        Long userId = UserContextHolder.getCurrentUserId();
         return ResponseResult.success(balanceMapper.selectByUserId(userId));
     }
 }
-

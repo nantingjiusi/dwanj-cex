@@ -2,8 +2,11 @@ package com.remus.dwanjcex.websocket;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.remus.dwanjcex.wallet.entity.Trade;
 import com.remus.dwanjcex.websocket.dto.WebSocketPushMessage;
 import com.remus.dwanjcex.websocket.event.OrderBookUpdateEvent;
+import com.remus.dwanjcex.websocket.event.OrderCancelNotificationEvent;
+import com.remus.dwanjcex.websocket.event.TradeExecutedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
@@ -12,19 +15,11 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.io.IOException;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 
-/**
- * 负责通过WebSocket向客户端推送消息。
- *
- * @author Remus
- * @version 1.0
- * @since 2024/7/18 20:45
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -32,65 +27,89 @@ public class WebSocketPushService {
 
     private final ObjectMapper objectMapper;
 
-    /**
-     * 存储订阅关系：topic -> Set<WebSocketSession>
-     * 例如: "orderbook:BTCUSDT" -> {session1, session2, ...}
-     */
     private final Map<String, Set<WebSocketSession>> subscriptions = new ConcurrentHashMap<>();
+    private final Map<Long, WebSocketSession> userSessions = new ConcurrentHashMap<>();
 
-    /**
-     * 监听订单簿更新事件，并向订阅者推送。
-     * @param event 订单簿更新事件
-     */
     @EventListener
     public void handleOrderBookUpdate(OrderBookUpdateEvent event) {
         String topic = "orderbook:" + event.getSymbol();
-        log.debug("处理订单簿更新事件，主题: {}", topic);
+        broadcast(topic, event.getOrderBookData());
+    }
 
-        Set<WebSocketSession> subscribers = subscriptions.get(topic);
-        if (subscribers == null || subscribers.isEmpty()) {
-            return; // 没有订阅者
+    @EventListener
+    public void handleTradeExecuted(TradeExecutedEvent event) {
+        Trade trade = event.getTrade();
+        String topic = "ticker:" + trade.getSymbol();
+        // 我们只需要推送价格
+        broadcast(topic, trade.getPrice());
+    }
+
+    @EventListener
+    public void handleOrderCancelNotification(OrderCancelNotificationEvent event) {
+        Long userId = event.getUserId();
+        String topic = "private:" + userId;
+        WebSocketSession session = userSessions.get(userId);
+        if (session != null && session.isOpen()) {
+            try {
+                Map<String, Object> data = Map.of(
+                        "type", "orderUpdate",
+                        "orderId", event.getOrderId(),
+                        "status", "CANCELED",
+                        "reason", event.getReason()
+                );
+                sendMessage(session, topic, data);
+            } catch (IOException e) {
+                log.error("向session {} 发送私有消息失败: {}", session.getId(), e.getMessage());
+            }
         }
+    }
 
+    public void subscribe(String topic, WebSocketSession session) {
+        subscriptions.computeIfAbsent(topic, k -> new CopyOnWriteArraySet<>()).add(session);
+        log.info("Session {} 订阅了公共主题: {}", session.getId(), topic);
+    }
+
+    public void registerUserSession(Long userId, WebSocketSession session) {
+        userSessions.put(userId, session);
+        session.getAttributes().put("userId", userId);
+        log.info("Session {} 已注册为用户 {}", session.getId(), userId);
+    }
+
+    public void unsubscribe(WebSocketSession session) {
+        subscriptions.forEach((topic, subscribers) -> {
+            if (subscribers.remove(session)) {
+                log.info("Session {} 取消订阅了公共主题: {}", session.getId(), topic);
+            }
+        });
+        Long userId = (Long) session.getAttributes().get("userId");
+        if (userId != null) {
+            userSessions.remove(userId, session);
+            log.info("Session {} (用户 {}) 已注销。", session.getId(), userId);
+        }
+    }
+
+    private void broadcast(String topic, Object data) {
+        Set<WebSocketSession> subscribers = subscriptions.get(topic);
+        if (subscribers == null || subscribers.isEmpty()) return;
         try {
-            WebSocketPushMessage<?> pushMessage = new WebSocketPushMessage<>(topic, event.getOrderBookData());
-            String payload = objectMapper.writeValueAsString(pushMessage);
+            String payload = objectMapper.writeValueAsString(new WebSocketPushMessage<>(topic, data));
             TextMessage textMessage = new TextMessage(payload);
-
-            // 向所有订阅者广播消息
             for (WebSocketSession session : subscribers) {
                 if (session.isOpen()) {
                     try {
                         session.sendMessage(textMessage);
                     } catch (IOException e) {
-                        log.error("向session {} 发送消息失败: {}", session.getId(), e.getMessage());
+                        log.error("向session {} 广播消息失败: {}", session.getId(), e.getMessage());
                     }
                 }
             }
         } catch (JsonProcessingException e) {
-            log.error("序列化WebSocket推送消息失败: {}", e.getMessage());
+            log.error("序列化广播消息失败: {}", e.getMessage());
         }
     }
 
-    /**
-     * 注册一个订阅。
-     * @param topic   主题
-     * @param session WebSocket会话
-     */
-    public void subscribe(String topic, WebSocketSession session) {
-        subscriptions.computeIfAbsent(topic, k -> new CopyOnWriteArraySet<>()).add(session);
-        log.info("Session {} 订阅了主题: {}", session.getId(), topic);
-    }
-
-    /**
-     * 取消一个会话的所有订阅。
-     * @param session WebSocket会话
-     */
-    public void unsubscribe(WebSocketSession session) {
-        subscriptions.forEach((topic, subscribers) -> {
-            if (subscribers.remove(session)) {
-                log.info("Session {} 取消订阅了主题: {}", session.getId(), topic);
-            }
-        });
+    private void sendMessage(WebSocketSession session, String topic, Object data) throws IOException {
+        String payload = objectMapper.writeValueAsString(new WebSocketPushMessage<>(topic, data));
+        session.sendMessage(new TextMessage(payload));
     }
 }

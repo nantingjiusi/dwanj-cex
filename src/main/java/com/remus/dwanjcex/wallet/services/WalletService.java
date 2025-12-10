@@ -10,6 +10,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.List;
 
 import static com.remus.dwanjcex.wallet.entity.result.ResultCode.INSUFFICIENT_BALANCE;
 import static com.remus.dwanjcex.wallet.entity.result.ResultCode.NO_FROZEN;
@@ -41,13 +43,13 @@ public class WalletService {
     }
 
     @Transactional
-    public void deposit(Long userId, String assetEnum, BigDecimal amount, String ref) {
-        UserBalance b = fetchOrCreate(userId,assetEnum);
-        b.setAvailable(b.getAvailable().add(amount).setScale(SCALE, BigDecimal.ROUND_HALF_UP));
+    public void deposit(Long userId, String asset, BigDecimal amount, String ref) {
+        UserBalance b = fetchOrCreate(userId, asset);
+        b.setAvailable(b.getAvailable().add(amount).setScale(SCALE, RoundingMode.HALF_UP));
         balanceMapper.update(b);
         txMapper.insert(LedgerTx.builder()
                 .userId(userId)
-                .asset(assetEnum)
+                .asset(asset)
                 .amount(amount)
                 .type(LedgerTxType.DEPOSIT)
                 .ref(ref)
@@ -60,8 +62,8 @@ public class WalletService {
         if (b.getAvailable().compareTo(amount) < 0) {
             return false;
         }
-        b.setAvailable(b.getAvailable().subtract(amount).setScale(SCALE, BigDecimal.ROUND_HALF_UP));
-        b.setFrozen(b.getFrozen().add(amount).setScale(SCALE, BigDecimal.ROUND_HALF_UP));
+        b.setAvailable(b.getAvailable().subtract(amount).setScale(SCALE, RoundingMode.HALF_UP));
+        b.setFrozen(b.getFrozen().add(amount).setScale(SCALE, RoundingMode.HALF_UP));
         balanceMapper.update(b);
         txMapper.insert(LedgerTx.builder()
                 .userId(userId)
@@ -79,8 +81,8 @@ public class WalletService {
         if (b.getFrozen().compareTo(amount) < 0) {
             return false;
         }
-        b.setFrozen(b.getFrozen().subtract(amount).setScale(SCALE, BigDecimal.ROUND_HALF_UP));
-        b.setAvailable(b.getAvailable().add(amount).setScale(SCALE, BigDecimal.ROUND_HALF_UP));
+        b.setFrozen(b.getFrozen().subtract(amount).setScale(SCALE, RoundingMode.HALF_UP));
+        b.setAvailable(b.getAvailable().add(amount).setScale(SCALE, RoundingMode.HALF_UP));
         balanceMapper.update(b);
         txMapper.insert(LedgerTx.builder()
                 .userId(userId)
@@ -95,7 +97,7 @@ public class WalletService {
     @Transactional
     public void settleDebit(Long userId, String asset, BigDecimal amount, String ref) {
         UserBalance b = fetchOrCreate(userId, asset);
-        b.setFrozen(b.getFrozen().subtract(amount).setScale(SCALE, BigDecimal.ROUND_HALF_UP));
+        b.setFrozen(b.getFrozen().subtract(amount).setScale(SCALE, RoundingMode.HALF_UP));
         balanceMapper.update(b);
         txMapper.insert(LedgerTx.builder()
                 .userId(userId)
@@ -109,7 +111,7 @@ public class WalletService {
     @Transactional
     public void settleCredit(Long userId, String asset, BigDecimal amount, String ref) {
         UserBalance b = fetchOrCreate(userId, asset);
-        b.setAvailable(b.getAvailable().add(amount).setScale(SCALE, BigDecimal.ROUND_HALF_UP));
+        b.setAvailable(b.getAvailable().add(amount).setScale(SCALE, RoundingMode.HALF_UP));
         balanceMapper.update(b);
         txMapper.insert(LedgerTx.builder()
                 .userId(userId)
@@ -125,11 +127,19 @@ public class WalletService {
         return fetchOrCreate(userId, asset);
     }
 
+    /**
+     * 查询用户所有资产余额。
+     * @param userId 用户ID
+     * @return 用户所有资产余额的列表
+     */
+    public List<UserBalance> getAllBalances(Long userId) {
+        return balanceMapper.selectByUserId(userId);
+    }
+
     public void reduceFrozen(Long userId, String asset, BigDecimal amount) {
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             return; // 无需减少
         }
-        // 查询用户资产
         UserBalance balance = balanceMapper.selectByUserIdAndAsset(userId, asset);
         if (balance == null) {
             throw new BusinessException(INSUFFICIENT_BALANCE);
@@ -140,10 +150,7 @@ public class WalletService {
             throw new BusinessException(NO_FROZEN);
         }
 
-        // 减少冻结资金
         balance.setFrozen(frozen.subtract(amount));
-
-        // 更新数据库
         balanceMapper.update(balance);
     }
 }
