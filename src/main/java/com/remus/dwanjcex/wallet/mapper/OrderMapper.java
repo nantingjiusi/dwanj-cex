@@ -24,11 +24,13 @@ public interface OrderMapper {
     @Select(" SELECT * FROM orders WHERE id=#{id}")
     OrderEntity selectById(@Param("id") Long id);
 
-    /**
-     * 根据用户ID查询所有订单，按创建时间降序排列。
-     * @param userId 用户ID
-     * @return 订单列表
-     */
     @Select("SELECT * FROM orders WHERE user_id = #{userId} ORDER BY id DESC")
     List<OrderEntity> selectByUserId(@Param("userId") Long userId);
+
+    /**
+     * 查询所有出现过的交易对名称。
+     * @return 交易对名称列表
+     */
+    @Select("SELECT DISTINCT symbol FROM orders")
+    List<String> findAllSymbols();
 }
