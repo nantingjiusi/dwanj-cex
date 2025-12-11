@@ -32,41 +32,39 @@ public class WebSocketPushService {
     private final Map<String, Set<WebSocketSession>> subscriptions = new ConcurrentHashMap<>();
     private final Map<Long, WebSocketSession> userSessions = new ConcurrentHashMap<>();
     
-    // 存储每个交易对的最新成交价
     private final Map<String, BigDecimal> lastPrices = new ConcurrentHashMap<>(); 
-    // 存储上一次推送给前端的价格，用于去重和节流
     private final Map<String, BigDecimal> lastPushedPrices = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastPushTimeMap = new ConcurrentHashMap<>();
 
     @EventListener
     public void handleOrderBookUpdate(OrderBookUpdateEvent event) {
         String topic = "orderbook:" + event.getSymbol();
-        // 订单簿更新通常频率较低（由Disruptor批处理控制），可以直接推送
-        // 如果订单簿更新也非常频繁，也可以应用类似的节流逻辑
         broadcast(topic, event.getOrderBookData());
     }
 
     @EventListener
     public void handleTradeExecuted(TradeExecutedEvent event) {
         Trade trade = event.getTrade();
-        // 【修改】只更新缓存，不直接推送
         lastPrices.put(trade.getSymbol(), trade.getPrice());
     }
 
-    /**
-     * 定时任务：每100ms检查一次是否有新的价格需要推送。
-     * 实现了推送节流，避免前端因高频更新而卡顿。
-     */
     @Scheduled(fixedRate = 100)
     public void pushTickerUpdates() {
+        long now = System.currentTimeMillis();
+        
         lastPrices.forEach((symbol, currentPrice) -> {
             BigDecimal lastPushed = lastPushedPrices.get(symbol);
+            Long lastPushTime = lastPushTimeMap.getOrDefault(symbol, 0L);
             
-            // 只有当价格发生变化，或者从未推送过时，才进行推送
-            if (lastPushed == null || currentPrice.compareTo(lastPushed) != 0) {
+            boolean priceChanged = lastPushed == null || currentPrice.compareTo(lastPushed) != 0;
+            boolean forcePush = (now - lastPushTime) > 1000;
+
+            if (priceChanged || forcePush) {
                 String topic = "ticker:" + symbol;
                 broadcast(topic, currentPrice);
+                
                 lastPushedPrices.put(symbol, currentPrice);
-                // log.debug("推送了 {} 的最新价格: {}", symbol, currentPrice);
+                lastPushTimeMap.put(symbol, now);
             }
         });
     }
@@ -130,7 +128,10 @@ public class WebSocketPushService {
             for (WebSocketSession session : subscribers) {
                 if (session.isOpen()) {
                     try {
-                        session.sendMessage(textMessage);
+                        // 【关键修复】加锁，防止并发写入导致 IllegalStateException
+                        synchronized (session) {
+                            session.sendMessage(textMessage);
+                        }
                     } catch (IOException e) {
                         log.error("向session {} 广播消息失败: {}", session.getId(), e.getMessage());
                     }
@@ -143,6 +144,10 @@ public class WebSocketPushService {
 
     private void sendMessage(WebSocketSession session, String topic, Object data) throws IOException {
         String payload = objectMapper.writeValueAsString(new WebSocketPushMessage<>(topic, data));
-        session.sendMessage(new TextMessage(payload));
+        TextMessage textMessage = new TextMessage(payload);
+        // 【关键修复】加锁，防止并发写入
+        synchronized (session) {
+            session.sendMessage(textMessage);
+        }
     }
 }

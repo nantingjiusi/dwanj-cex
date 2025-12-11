@@ -22,7 +22,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Component
@@ -33,6 +36,10 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     private final TradeMapper tradeMapper;
     private final SymbolService symbolService;
     private final ApplicationEventPublisher eventPublisher;
+
+    private final List<Trade> pendingTrades = new ArrayList<>();
+    private final Map<Long, OrderEntity> pendingOrderUpdates = new HashMap<>();
+    private static final int BATCH_SIZE = 100;
 
     public PersistenceHandler(WalletService walletService, OrderMapper orderMapper, TradeMapper tradeMapper, SymbolService symbolService, ApplicationEventPublisher eventPublisher) {
         this.walletService = walletService;
@@ -45,96 +52,111 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     @Override
     @Transactional
     public void onEvent(DisruptorEvent event, long sequence, boolean endOfBatch) throws Exception {
-        switch (event.getType()) {
-            case PLACE_ORDER:
-                handlePlaceOrderPersistence(event);
-                break;
-            case CANCEL_ORDER:
-                handleCancelOrderPersistence(event);
-                break;
-            default:
-                log.warn("持久化处理器收到未知的事件类型: {}", event.getType());
+        try {
+            switch (event.getType()) {
+                case PLACE_ORDER:
+                    handlePlaceOrderPersistence(event);
+                    break;
+                case CANCEL_ORDER:
+                    handleCancelOrderPersistence(event);
+                    break;
+            }
+
+            if (endOfBatch || pendingTrades.size() >= BATCH_SIZE || pendingOrderUpdates.size() >= BATCH_SIZE) {
+                flush();
+            }
+        } catch (Exception e) {
+            log.error("PersistenceHandler 处理事件失败: event={}", event, e);
         }
     }
 
     private void handlePlaceOrderPersistence(DisruptorEvent event) {
-        // 1. 处理有效成交
+        if (event.getCancelledOrderIds() != null && !event.getCancelledOrderIds().isEmpty()) {
+            for (Long cancelledOrderId : event.getCancelledOrderIds()) {
+                try {
+                    cancelExistingOrder(cancelledOrderId, "Cancelled by market order self-trade");
+                } catch (Exception e) {
+                    log.error("处理自成交取消挂单失败: orderId={}", cancelledOrderId, e);
+                }
+            }
+        }
+
         List<TradeEvent> trades = event.getTradeEvents();
         if (trades != null && !trades.isEmpty()) {
             BigDecimal totalTradedQty = BigDecimal.ZERO;
             BigDecimal totalTradedCost = BigDecimal.ZERO;
 
             for (TradeEvent trade : trades) {
-                SymbolEntity symbol = symbolService.getSymbol(trade.getSymbol());
-                if (symbol == null) continue;
+                try {
+                    SymbolEntity symbol = symbolService.getSymbol(trade.getSymbol());
+                    if (symbol == null) continue;
 
-                BigDecimal tradedCost = trade.getPrice().multiply(trade.getQuantity()).setScale(symbol.getQuoteScale(), RoundingMode.DOWN);
-                totalTradedQty = totalTradedQty.add(trade.getQuantity());
-                totalTradedCost = totalTradedCost.add(tradedCost);
+                    BigDecimal tradedCost = trade.getPrice().multiply(trade.getQuantity()).setScale(symbol.getQuoteScale(), RoundingMode.DOWN);
+                    totalTradedQty = totalTradedQty.add(trade.getQuantity());
+                    totalTradedCost = totalTradedCost.add(tradedCost);
 
-                walletService.reduceFrozen(trade.getBuyerUserId(), symbol.getQuoteCoin(), tradedCost);
-                walletService.reduceFrozen(trade.getSellerUserId(), symbol.getBaseCoin(), trade.getQuantity());
-                walletService.settleCredit(trade.getBuyerUserId(), symbol.getBaseCoin(), trade.getQuantity(), "trade");
-                walletService.settleCredit(trade.getSellerUserId(), symbol.getQuoteCoin(), tradedCost, "trade");
+                    // 【修改】传入 reason
+                    String reason = "trade:" + trade.getBuyOrderId() + "/" + trade.getSellOrderId();
+                    walletService.reduceFrozen(trade.getBuyerUserId(), symbol.getQuoteCoin(), tradedCost, reason);
+                    walletService.reduceFrozen(trade.getSellerUserId(), symbol.getBaseCoin(), trade.getQuantity(), reason);
+                    
+                    walletService.settleCredit(trade.getBuyerUserId(), symbol.getBaseCoin(), trade.getQuantity(), reason);
+                    walletService.settleCredit(trade.getSellerUserId(), symbol.getQuoteCoin(), tradedCost, reason);
 
-                Trade tradeEntity = Trade.builder()
-                        .buyOrderId(trade.getBuyOrderId()).sellOrderId(trade.getSellOrderId())
-                        .symbol(trade.getSymbol()).price(trade.getPrice()).quantity(trade.getQuantity())
-                        .build();
-                tradeMapper.insert(tradeEntity);
+                    Trade tradeEntity = Trade.builder()
+                            .buyOrderId(trade.getBuyOrderId()).sellOrderId(trade.getSellOrderId())
+                            .symbol(trade.getSymbol()).price(trade.getPrice()).quantity(trade.getQuantity())
+                            .build();
+                    pendingTrades.add(tradeEntity);
 
-                updateOrderStatus(trade.getBuyOrderId(), trade.getQuantity(), tradedCost);
-                updateOrderStatus(trade.getSellOrderId(), trade.getQuantity(), tradedCost);
+                    updateOrderStatus(trade.getBuyOrderId(), trade.getQuantity(), tradedCost);
+                    updateOrderStatus(trade.getSellOrderId(), trade.getQuantity(), tradedCost);
 
-                eventPublisher.publishEvent(new TradeExecutedEvent(this, tradeEntity));
-            }
-
-            OrderEntity incomingOrder = orderMapper.selectById(event.getOrderId());
-            if (incomingOrder != null && incomingOrder.getType() == OrderTypes.OrderType.MARKET) {
-                if (totalTradedQty.compareTo(BigDecimal.ZERO) > 0) {
-                    BigDecimal avgPrice = totalTradedCost.divide(totalTradedQty, symbolService.getSymbol(incomingOrder.getSymbol()).getQuoteScale(), RoundingMode.HALF_UP);
-                    incomingOrder.setPrice(avgPrice);
-                    orderMapper.update(incomingOrder);
+                    eventPublisher.publishEvent(new TradeExecutedEvent(this, tradeEntity));
+                } catch (Exception e) {
+                    log.error("处理成交事件失败: trade={}", trade, e);
                 }
             }
+
+            try {
+                OrderEntity incomingOrder = orderMapper.selectById(event.getOrderId());
+                if (incomingOrder != null && incomingOrder.getType() == OrderTypes.OrderType.MARKET) {
+                    if (totalTradedQty.compareTo(BigDecimal.ZERO) > 0) {
+                        BigDecimal avgPrice = totalTradedCost.divide(totalTradedQty, symbolService.getSymbol(incomingOrder.getSymbol()).getQuoteScale(), RoundingMode.HALF_UP);
+                        incomingOrder.setPrice(avgPrice);
+                        pendingOrderUpdates.put(incomingOrder.getId(), incomingOrder);
+                    }
+                }
+            } catch (Exception e) {
+                log.error("更新市价单均价失败: orderId={}", event.getOrderId(), e);
+            }
         }
 
-        // 2. 处理新订单的最终状态
-        OrderEntity finalOrderState = orderMapper.selectById(event.getOrderId());
-        if (finalOrderState == null) return;
+        try {
+            OrderEntity finalOrderState = orderMapper.selectById(event.getOrderId());
+            if (finalOrderState == null) return;
 
-        // 2.1 如果订单因为STP策略而提前结束
-        if (event.isSelfTradeCancel()) {
-            String reason = "Self-trade detected (Expire Taker)";
-            log.warn("订单 {} 因 '{}' 而关闭，解冻剩余资金。", finalOrderState.getId(), reason);
+            boolean isTerminatedBySelfTrade = event.isSelfTradeCancel();
+            boolean isMarketOrderAndNotFilled = finalOrderState.getType() == OrderTypes.OrderType.MARKET && !finalOrderState.isFullyFilled();
 
-            if (finalOrderState.getType() == OrderTypes.OrderType.MARKET && finalOrderState.getSide() == OrderTypes.Side.BUY) {
-                finalOrderState.setAmount(finalOrderState.getFilled());
+            if (isTerminatedBySelfTrade || isMarketOrderAndNotFilled) {
+                String reason = isTerminatedBySelfTrade ? "Self-trade detected" : "Market order closed due to insufficient depth";
+                
+                if (finalOrderState.getType() == OrderTypes.OrderType.MARKET && finalOrderState.getSide() == OrderTypes.Side.BUY) {
+                    finalOrderState.setAmount(finalOrderState.getFilled());
+                }
+
+                unfreezeRemainingFunds(finalOrderState, reason);
+                
+                if (finalOrderState.getFilled().compareTo(BigDecimal.ZERO) > 0) {
+                    finalOrderState.setStatus(OrderStatus.PARTIALLY_FILLED_AND_CLOSED);
+                } else {
+                    finalOrderState.setStatus(OrderStatus.CANCELED);
+                }
+                pendingOrderUpdates.put(finalOrderState.getId(), finalOrderState);
             }
-
-            unfreezeRemainingFunds(finalOrderState, reason);
-            
-            if (finalOrderState.getFilled().compareTo(BigDecimal.ZERO) > 0) {
-                finalOrderState.setStatus(OrderStatus.PARTIALLY_FILLED_AND_CLOSED);
-            } else {
-                finalOrderState.setStatus(OrderStatus.CANCELED);
-            }
-            orderMapper.update(finalOrderState);
-            return; // STP策略优先级最高，处理完直接返回
-        }
-
-        // 2.2 如果是市价单，处理其最终状态 (深度不足)
-        if (finalOrderState.getType() == OrderTypes.OrderType.MARKET) {
-            if (finalOrderState.getSide() == OrderTypes.Side.BUY) {
-                finalOrderState.setAmount(finalOrderState.getFilled());
-            }
-
-            if (!finalOrderState.isFullyFilled()) {
-                unfreezeRemainingMarketOrderFunds(finalOrderState);
-                finalOrderState.setStatus(OrderStatus.PARTIALLY_FILLED_AND_CLOSED);
-                eventPublisher.publishEvent(new OrderCancelNotificationEvent(this, finalOrderState.getUserId(), finalOrderState.getId(), "Market order closed due to insufficient depth"));
-            }
-            orderMapper.update(finalOrderState);
+        } catch (Exception e) {
+            log.error("处理订单最终状态失败: orderId={}", event.getOrderId(), e);
         }
     }
 
@@ -149,29 +171,9 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         if (order.getStatus() != OrderStatus.NEW && order.getStatus() != OrderStatus.PARTIAL) return;
         unfreezeRemainingFunds(order, reason);
         order.setStatus(OrderStatus.CANCELED);
-        orderMapper.update(order);
+        pendingOrderUpdates.put(order.getId(), order);
     }
-
-    private void unfreezeRemainingMarketOrderFunds(OrderEntity order) {
-        SymbolEntity symbol = symbolService.getSymbol(order.getSymbol());
-        if (symbol == null) {
-            log.error("解冻失败：找不到交易对 {}", order.getSymbol());
-            return;
-        }
-
-        if (order.getSide() == OrderTypes.Side.BUY) {
-            BigDecimal remainingQuote = order.getQuoteAmount().subtract(order.getQuoteFilled());
-            if (remainingQuote.compareTo(BigDecimal.ZERO) > 0) {
-                walletService.unfreeze(order.getUserId(), symbol.getQuoteCoin(), remainingQuote, "market_partial_unfreeze:" + order.getId());
-            }
-        } else { // SELL
-            BigDecimal remainingQty = order.getAmount().subtract(order.getFilled());
-            if (remainingQty.compareTo(BigDecimal.ZERO) > 0) {
-                walletService.unfreeze(order.getUserId(), symbol.getBaseCoin(), remainingQty, "market_partial_unfreeze:" + order.getId());
-            }
-        }
-    }
-
+    
     private void unfreezeRemainingFunds(OrderEntity order, String reason) {
         if (order.getStatus() == OrderStatus.CANCELED || order.getStatus() == OrderStatus.FILLED || order.getStatus() == OrderStatus.PARTIALLY_FILLED_AND_CLOSED) {
             return;
@@ -201,9 +203,9 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     }
 
     private void updateOrderStatus(Long orderId, BigDecimal tradedQty, BigDecimal tradedCost) {
-        OrderEntity order = orderMapper.selectById(orderId);
+        OrderEntity order = pendingOrderUpdates.computeIfAbsent(orderId, id -> orderMapper.selectById(id));
         if (order == null) return;
-
+        
         order.addFilled(tradedQty);
         if (order.getType() == OrderTypes.OrderType.MARKET && order.getSide() == OrderTypes.Side.BUY) {
             order.addQuoteFilled(tradedCost);
@@ -214,6 +216,30 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         } else {
             order.setStatus(OrderStatus.PARTIAL);
         }
-        orderMapper.update(order);
+        pendingOrderUpdates.put(orderId, order);
+    }
+
+    private void flush() {
+        if (!pendingTrades.isEmpty()) {
+            try {
+                tradeMapper.insertBatch(pendingTrades);
+                log.info("批量插入 {} 条成交记录。", pendingTrades.size());
+            } catch (Exception e) {
+                log.error("批量插入成交记录失败。", e);
+            } finally {
+                pendingTrades.clear();
+            }
+        }
+        if (!pendingOrderUpdates.isEmpty()) {
+            try {
+                List<OrderEntity> ordersToUpdate = new ArrayList<>(pendingOrderUpdates.values());
+                orderMapper.updateBatch(ordersToUpdate);
+                log.info("批量更新 {} 个订单状态。", ordersToUpdate.size());
+            } catch (Exception e) {
+                log.error("批量更新订单状态失败。", e);
+            } finally {
+                pendingOrderUpdates.clear();
+            }
+        }
     }
 }

@@ -4,18 +4,20 @@ import com.remus.dwanjcex.common.OrderTypes;
 import com.remus.dwanjcex.disruptor.event.DisruptorEvent;
 import com.remus.dwanjcex.disruptor.event.TradeEvent;
 import com.remus.dwanjcex.engine.OrderBook;
+import com.remus.dwanjcex.engine.OrderBucket;
 import com.remus.dwanjcex.engine.stp.STPStrategyFactory;
 import com.remus.dwanjcex.wallet.entity.OrderEntity;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.util.Deque;
-import java.util.Map;
 import java.util.Optional;
 
+@Slf4j
 @Component
 @RequiredArgsConstructor
+
 public class LimitOrderMatchStrategy implements MatchStrategy {
 
     private final STPStrategyFactory stpStrategyFactory;
@@ -28,57 +30,68 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
             matchSellOrder(order, orderBook, event);
         }
 
-        if (!event.isSelfTradeCancel() && !order.isFullyFilled()) {
+        if (!order.isFullyFilled()) {
             orderBook.add(order);
         }
     }
 
     private void matchBuyOrder(OrderEntity buyOrder, OrderBook orderBook, DisruptorEvent event) {
+        long buyPrice = OrderBook.toLong(buyOrder.getPrice());
         while (buyOrder.getRemaining().compareTo(BigDecimal.ZERO) > 0) {
-            Optional<Map.Entry<BigDecimal, Deque<OrderEntity>>> bestAskOpt = orderBook.bestAsk();
-            if (bestAskOpt.isEmpty() || buyOrder.getPrice().compareTo(bestAskOpt.get().getKey()) < 0) break;
+            Optional<OrderBucket> bestAskBucketOpt = orderBook.getBestAskBucket();
+            if (bestAskBucketOpt.isEmpty() || buyPrice < bestAskBucketOpt.get().getPrice()) {
+                break;
+            }
 
-            Deque<OrderEntity> askQueue = bestAskOpt.get().getValue();
-            OrderEntity sellOrder = askQueue.peekFirst();
+            OrderBucket askBucket = bestAskBucketOpt.get();
+            OrderEntity sellOrder = askBucket.peek();
             if (sellOrder == null) {
-                orderBook.removePriceLevelIfEmpty(OrderTypes.Side.SELL, bestAskOpt.get().getKey());
+                orderBook.getAsks().remove(askBucket.getPrice());
                 continue;
             }
 
             if (buyOrder.getUserId().equals(sellOrder.getUserId())) {
-                boolean shouldBreak = stpStrategyFactory.getActiveStrategy().handleSelfTrade(buyOrder, sellOrder, orderBook, askQueue, event);
+                boolean shouldBreak = stpStrategyFactory.getActiveStrategy().handleSelfTrade(buyOrder, sellOrder, orderBook, null, event);
                 if (shouldBreak) break;
                 continue;
             }
 
-            processTrade(buyOrder, sellOrder, bestAskOpt.get().getKey(), orderBook, event);
+            processTrade(buyOrder, sellOrder, OrderBook.toBigDecimal(askBucket.getPrice()), orderBook, event);
         }
     }
 
     private void matchSellOrder(OrderEntity sellOrder, OrderBook orderBook, DisruptorEvent event) {
+        long sellPrice = OrderBook.toLong(sellOrder.getPrice());
         while (sellOrder.getRemaining().compareTo(BigDecimal.ZERO) > 0) {
-            Optional<Map.Entry<BigDecimal, Deque<OrderEntity>>> bestBidOpt = orderBook.bestBid();
-            if (bestBidOpt.isEmpty() || sellOrder.getPrice().compareTo(bestBidOpt.get().getKey()) > 0) break;
+            Optional<OrderBucket> bestBidBucketOpt = orderBook.getBestBidBucket();
+            if (bestBidBucketOpt.isEmpty() || sellPrice > bestBidBucketOpt.get().getPrice()) {
+                break;
+            }
 
-            Deque<OrderEntity> bidQueue = bestBidOpt.get().getValue();
-            OrderEntity buyOrder = bidQueue.peekFirst();
+            OrderBucket bidBucket = bestBidBucketOpt.get();
+            OrderEntity buyOrder = bidBucket.peek();
             if (buyOrder == null) {
-                orderBook.removePriceLevelIfEmpty(OrderTypes.Side.BUY, bestBidOpt.get().getKey());
+                orderBook.getBids().remove(bidBucket.getPrice());
                 continue;
             }
 
             if (sellOrder.getUserId().equals(buyOrder.getUserId())) {
-                boolean shouldBreak = stpStrategyFactory.getActiveStrategy().handleSelfTrade(sellOrder, buyOrder, orderBook, bidQueue, event);
+                boolean shouldBreak = stpStrategyFactory.getActiveStrategy().handleSelfTrade(sellOrder, buyOrder, orderBook, null, event);
                 if (shouldBreak) break;
                 continue;
             }
 
-            processTrade(buyOrder, sellOrder, bestBidOpt.get().getKey(), orderBook, event);
+            processTrade(buyOrder, sellOrder, OrderBook.toBigDecimal(bidBucket.getPrice()), orderBook, event);
         }
     }
 
     private void processTrade(OrderEntity buyOrder, OrderEntity sellOrder, BigDecimal price, OrderBook orderBook, DisruptorEvent event) {
         BigDecimal tradedQty = buyOrder.getRemaining().min(sellOrder.getRemaining());
+        
+        // 【新增】成交日志
+        log.info(">>> 撮合成功: BuyOrder[{}] vs SellOrder[{}] | Price: {} | Qty: {}", 
+                buyOrder.getId(), sellOrder.getId(), price, tradedQty);
+
         buyOrder.addFilled(tradedQty);
         sellOrder.addFilled(tradedQty);
 

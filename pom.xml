@@ -109,6 +109,12 @@
             <version>0.13.0</version>
             <scope>runtime</scope>
         </dependency>
+        <!-- 【新增】Redisson 分布式锁 -->
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson-spring-boot-starter</artifactId>
+            <version>3.20.1</version>
+        </dependency>
 	</dependencies>
 
 

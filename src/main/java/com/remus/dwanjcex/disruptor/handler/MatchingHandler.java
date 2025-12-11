@@ -53,8 +53,6 @@ public class MatchingHandler implements EventHandler<DisruptorEvent> {
             case CANCEL_ORDER:
                 symbolToUpdate = handleCancelOrder(event);
                 break;
-            default:
-                log.warn("未知的事件类型: {}", event.getType());
         }
 
         if (symbolToUpdate != null) {
@@ -96,12 +94,11 @@ public class MatchingHandler implements EventHandler<DisruptorEvent> {
     }
 
     private void updateSnapshotAndPublish(String symbol, OrderBook orderBook) {
-        // 1. 更新用于HTTP API和WebSocket初始推送的快照缓存
         Map<String, List<OrderBookLevel>> snapshot = orderBook.getOrderBookSnapshot();
         this.snapshotCache.put(symbol, snapshot);
 
-        // 2. 【关键修复】将活跃订单列表序列化到Redis，而不是整个OrderBook对象
         try {
+            // 仍然只序列化活跃订单列表
             List<OrderEntity> activeOrders = new ArrayList<>(orderBook.getOrderMap().values());
             String snapshotJson = objectMapper.writeValueAsString(activeOrders);
             redisTemplate.opsForValue().set("orderbook:snapshot:" + symbol, snapshotJson);
@@ -109,7 +106,6 @@ public class MatchingHandler implements EventHandler<DisruptorEvent> {
             log.error("序列化订单簿快照到Redis失败: symbol={}", symbol, e);
         }
 
-        // 3. 发布事件，用于WebSocket实时推送
         eventPublisher.publishEvent(new OrderBookUpdateEvent(this, symbol, snapshot));
     }
     
