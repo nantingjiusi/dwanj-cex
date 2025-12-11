@@ -25,10 +25,6 @@ import java.util.stream.Collectors;
 public class SymbolService {
 
     private final SymbolMapper symbolMapper;
-
-    /**
-     * 缓存所有交易对信息，以交易对名称（如 BTCUSDT）为key
-     */
     private final Map<String, SymbolEntity> symbolCache = new ConcurrentHashMap<>();
 
     public SymbolService(SymbolMapper symbolMapper) {
@@ -49,35 +45,29 @@ public class SymbolService {
         this.symbolCache.putAll(symbols.stream()
                 .collect(Collectors.toMap(SymbolEntity::getSymbol, Function.identity())));
         log.info("加载了 {} 个交易对信息。", symbols.size());
-        symbols.forEach(i-> System.out.println(i.getSymbol()));
     }
 
-    /**
-     * 根据交易对名称获取交易对实体
-     *
-     * @param symbol 交易对名称, e.g., "BTC/USDT"
-     * @return 交易对实体，如果不存在则返回 null
-     */
     public SymbolEntity getSymbol(String symbol) {
         return symbolCache.get(symbol);
     }
 
-    /**
-     * 获取所有已缓存的交易对
-     *
-     * @return 所有交易对实体
-     */
     public Collection<SymbolEntity> getAllSymbols() {
         return symbolCache.values();
     }
 
-    /**
-     * 检查交易对是否存在且已上线
-     *
-     * @param symbol 交易对名称
-     * @return 如果存在且已上线则返回 true
-     */
     public boolean isSymbolSupported(String symbol) {
         return symbolCache.containsKey(symbol);
+    }
+
+    /**
+     * 【新增】创建新的交易对，并更新缓存
+     */
+    public void createSymbol(SymbolEntity symbol) {
+        if (symbolMapper.findBySymbol(symbol.getSymbol()) != null) {
+            throw new IllegalStateException("Symbol with name " + symbol.getSymbol() + " already exists.");
+        }
+        symbolMapper.insert(symbol);
+        symbolCache.put(symbol.getSymbol(), symbol); // 更新缓存
+        log.info("Symbol {} has been created and cached.", symbol.getSymbol());
     }
 }

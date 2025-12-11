@@ -1,5 +1,6 @@
 package com.remus.dwanjcex.wallet.services;
 
+import com.remus.dwanjcex.common.KeyConstant;
 import com.remus.dwanjcex.common.LedgerTxType;
 import com.remus.dwanjcex.exception.BusinessException;
 import com.remus.dwanjcex.wallet.entity.LedgerTx;
@@ -50,7 +51,7 @@ public class WalletService {
 
     @Transactional
     public void deposit(Long userId, String asset, BigDecimal amount, String ref) {
-        RLock lock = redissonClient.getLock("lock:user:" + userId);
+        RLock lock = redissonClient.getLock(KeyConstant.LOCK_USER + userId);
         try {
             lock.lock();
             UserBalance b = fetchOrCreate(userId, asset);
@@ -64,7 +65,7 @@ public class WalletService {
 
     @Transactional
     public boolean freeze(Long userId, String asset, BigDecimal amount, String ref) {
-        RLock lock = redissonClient.getLock("lock:user:" + userId);
+        RLock lock = redissonClient.getLock(KeyConstant.LOCK_USER + userId);
         try {
             lock.lock();
             UserBalance b = fetchOrCreate(userId, asset);
@@ -73,6 +74,7 @@ public class WalletService {
             }
             b.setAvailable(b.getAvailable().subtract(amount).setScale(SCALE, RoundingMode.HALF_UP));
             b.setFrozen(b.getFrozen().add(amount).setScale(SCALE, RoundingMode.HALF_UP));
+            log.info("用户：{},冻结金额：{}",userId,amount);
             balanceMapper.update(b);
             txMapper.insert(LedgerTx.builder().userId(userId).asset(asset).amount(amount).type(LedgerTxType.FREEZE).ref(ref).build());
             return true;
@@ -83,7 +85,7 @@ public class WalletService {
 
     @Transactional
     public boolean unfreeze(Long userId, String asset, BigDecimal amount, String ref) {
-        RLock lock = redissonClient.getLock("lock:user:" + userId);
+        RLock lock = redissonClient.getLock(KeyConstant.LOCK_USER + userId);
         try {
             lock.lock();
             UserBalance b = fetchOrCreate(userId, asset);
@@ -92,6 +94,7 @@ public class WalletService {
             }
             b.setFrozen(b.getFrozen().subtract(amount).setScale(SCALE, RoundingMode.HALF_UP));
             b.setAvailable(b.getAvailable().add(amount).setScale(SCALE, RoundingMode.HALF_UP));
+            log.info("用户：{},解冻金额：{}",userId,amount);
             balanceMapper.update(b);
             txMapper.insert(LedgerTx.builder().userId(userId).asset(asset).amount(amount).type(LedgerTxType.UNFREEZE).ref(ref).build());
             return true;
@@ -102,7 +105,7 @@ public class WalletService {
 
     @Transactional
     public void settleCredit(Long userId, String asset, BigDecimal amount, String ref) {
-        RLock lock = redissonClient.getLock("lock:user:" + userId);
+        RLock lock = redissonClient.getLock(KeyConstant.LOCK_USER + userId);
         try {
             lock.lock();
             UserBalance b = fetchOrCreate(userId, asset);
@@ -117,7 +120,7 @@ public class WalletService {
     public void reduceFrozen(Long userId, String asset, BigDecimal amount, String reason) {
         if (amount.compareTo(BigDecimal.ZERO) <= 0) return;
         
-        RLock lock = redissonClient.getLock("lock:user:" + userId);
+        RLock lock = redissonClient.getLock(KeyConstant.LOCK_USER + userId);
         try {
             lock.lock();
             UserBalance balance = balanceMapper.selectByUserIdAndAsset(userId, asset);

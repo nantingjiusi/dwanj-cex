@@ -5,6 +5,9 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
 /**
  * 交易对实体
  *
@@ -49,7 +52,11 @@ public class SymbolEntity {
     private Integer quoteScale;
 
     /**
-     * 状态：1-上线，0-下线
+     * 【新增】最小订单额。
+     * 例如，对于BTC/USDT，此值可能为10，表示订单总价值不能低于10 USDT。
      */
-    private Integer status;
+    private BigDecimal minOrderValue;
+    
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
 }

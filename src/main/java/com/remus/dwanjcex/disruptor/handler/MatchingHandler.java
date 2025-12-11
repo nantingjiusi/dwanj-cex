@@ -11,8 +11,10 @@ import com.remus.dwanjcex.wallet.entity.OrderEntity;
 import com.remus.dwanjcex.wallet.entity.dto.CancelOrderDto;
 import com.remus.dwanjcex.wallet.entity.dto.OrderBookLevel;
 import com.remus.dwanjcex.wallet.entity.dto.OrderDto;
+import com.remus.dwanjcex.websocket.event.OrderForceRemovedEvent;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -31,7 +33,7 @@ public class MatchingHandler implements EventHandler<DisruptorEvent> {
     private final ObjectMapper objectMapper;
     private final MatchStrategyFactory strategyFactory;
 
-    private final Map<String, Map<String, List<OrderBookLevel>>> snapshotCache = new ConcurrentHashMap<>();
+    private volatile Map<String, Map<String, List<OrderBookLevel>>> snapshotCache = new ConcurrentHashMap<>();
 
     public MatchingHandler(StringRedisTemplate redisTemplate, ObjectMapper objectMapper, MatchStrategyFactory strategyFactory) {
         this.redisTemplate = redisTemplate;
@@ -55,6 +57,25 @@ public class MatchingHandler implements EventHandler<DisruptorEvent> {
             OrderBook orderBook = books.get(symbolToUpdate);
             if (orderBook != null) {
                 updateSnapshotAndPublish(symbolToUpdate, orderBook);
+            }
+        }
+    }
+
+    /**
+     * 【新增】监听强制移除事件，清理内存状态
+     */
+    @EventListener
+    public void handleForceRemoveOrder(OrderForceRemovedEvent event) {
+        log.warn("收到 OrderForceRemovedEvent，强制从内存订单簿中移除订单: {}", event.getOrderId());
+        OrderBook orderBook = books.get(event.getSymbol());
+        if (orderBook != null) {
+            boolean removed = orderBook.remove(event.getOrderId());
+            if (removed) {
+                log.info("成功从内存中移除僵尸订单: {}", event.getOrderId());
+                // 移除后，也更新一次快照和推送
+                updateSnapshotAndPublish(event.getSymbol(), orderBook);
+            } else {
+                log.warn("尝试移除僵尸订单 {} 失败，可能已被移除。", event.getOrderId());
             }
         }
     }
@@ -94,16 +115,13 @@ public class MatchingHandler implements EventHandler<DisruptorEvent> {
         this.snapshotCache.put(symbol, displaySnapshot);
 
         try {
-            // 1. 序列化活跃订单列表到Redis，用于重建
             List<OrderEntity> activeOrders = new ArrayList<>(orderBook.getOrderMap().values());
             String activeOrdersJson = objectMapper.writeValueAsString(activeOrders);
             redisTemplate.opsForValue().set("orderbook:snapshot:" + symbol, activeOrdersJson);
 
-            // 2. 【修改】序列化用于显示的快照到Redis
             String displaySnapshotJson = objectMapper.writeValueAsString(displaySnapshot);
             redisTemplate.opsForValue().set("orderbook_display_snapshot:" + symbol, displaySnapshotJson);
 
-            // 3. 向Redis频道发布订单簿更新
             redisTemplate.convertAndSend("channel:orderbook:" + symbol, displaySnapshotJson);
 
         } catch (JsonProcessingException e) {
@@ -116,7 +134,6 @@ public class MatchingHandler implements EventHandler<DisruptorEvent> {
         Map<String, List<OrderBookLevel>> snapshot = orderBook.getOrderBookSnapshot();
         this.snapshotCache.put(symbol, snapshot);
         
-        // 【新增】在重建时也预热Redis中的显示快照
         try {
             String displaySnapshotJson = objectMapper.writeValueAsString(snapshot);
             redisTemplate.opsForValue().set("orderbook_display_snapshot:" + symbol, displaySnapshotJson);

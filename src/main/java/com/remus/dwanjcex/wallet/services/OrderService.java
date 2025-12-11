@@ -1,5 +1,6 @@
 package com.remus.dwanjcex.wallet.services;
 
+import com.remus.dwanjcex.common.KeyConstant;
 import com.remus.dwanjcex.common.OrderStatus;
 import com.remus.dwanjcex.common.OrderTypes;
 import com.remus.dwanjcex.disruptor.event.OrderCancelEvent;
@@ -77,10 +78,10 @@ public class OrderService {
             } else { // MARKET BUY
                 amountToFreeze = order.getQuoteAmount();
             }
-            freezeOk = walletService.freeze(order.getUserId(), symbol.getQuoteCoin(), amountToFreeze, "order:" + order.getId());
+            freezeOk = walletService.freeze(order.getUserId(), symbol.getQuoteCoin(), amountToFreeze, KeyConstant.ORDER_FREEZE + order.getId());
             if (!freezeOk) throw new BusinessException(ResultCode.INSUFFICIENT_QUOTE);
         } else { // SELL
-            freezeOk = walletService.freeze(order.getUserId(), symbol.getBaseCoin(), order.getAmount(), "order:" + order.getId());
+            freezeOk = walletService.freeze(order.getUserId(), symbol.getBaseCoin(), order.getAmount(), KeyConstant.ORDER_FREEZE + order.getId());
             if (!freezeOk) throw new BusinessException(ResultCode.INSUFFICIENT_BASE);
         }
     }

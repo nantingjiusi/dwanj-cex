@@ -58,10 +58,5 @@ public class DisruptorEvent {
         this.tradeEvents.add(tradeEvent);
     }
 
-    public void addCancelledOrderId(Long orderId) {
-        if (this.cancelledOrderIds == null) {
-            this.cancelledOrderIds = new ArrayList<>();
-        }
-        this.cancelledOrderIds.add(orderId);
-    }
+
 }

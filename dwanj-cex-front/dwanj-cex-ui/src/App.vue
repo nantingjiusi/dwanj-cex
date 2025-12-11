@@ -1,6 +1,17 @@
 <template>
   <div id="app">
     <h1>CEX Trading Terminal</h1>
+    
+    <!-- 【新增】交易对选择器 -->
+    <div class="symbol-selector">
+      <span>Trading Pair:</span>
+      <select v-model="currentSymbol" @change="switchSymbol">
+        <option value="BTCUSDT">BTC/USDT</option>
+        <option value="ETHUSDT">ETH/USDT</option>
+        <option value="ZEUUSDT">ZEU/USDT</option>
+      </select>
+    </div>
+
     <div class="main-container">
       <div class="left-panel">
         <Ticker :price="tickerState.price" :lastPrice="tickerState.lastPrice" />
@@ -44,6 +55,15 @@ export default {
     const currentSymbol = ref('BTCUSDT');
     const balancesComponent = ref(null);
     const myOrdersComponent = ref(null);
+
+    const switchSymbol = () => {
+      console.log(`Switching to symbol: ${currentSymbol.value}`);
+      disconnectWebSocket();
+      // 重置状态，避免显示旧数据
+      tickerState.price = 0;
+      tickerState.lastPrice = 0;
+      connectWebSocket(currentSymbol.value);
+    };
 
     onMounted(() => {
       connectWebSocket(currentSymbol.value);
@@ -92,6 +112,7 @@ export default {
       balancesComponent,
       myOrdersComponent,
       tickerState,
+      switchSymbol, // 暴露给模板
       onLoginSuccess,
       onLogout,
       onOrderPlaced,
@@ -105,6 +126,11 @@ export default {
 #app {
   font-family: Avenir, Helvetica, Arial, sans-serif;
   color: #2c3e50;
+}
+.symbol-selector {
+  text-align: center;
+  margin-bottom: 20px;
+  font-size: 18px;
 }
 .main-container, .orders-container {
   display: flex;

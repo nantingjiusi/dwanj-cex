@@ -15,12 +15,15 @@ import com.remus.dwanjcex.wallet.mapper.TradeMapper;
 import com.remus.dwanjcex.wallet.services.SymbolService;
 import com.remus.dwanjcex.wallet.services.WalletService;
 import com.remus.dwanjcex.websocket.event.OrderCancelNotificationEvent;
+import com.remus.dwanjcex.websocket.event.OrderForceRemovedEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -45,7 +48,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     // 【批处理优化】缓冲区
     private final List<Trade> pendingTrades = new ArrayList<>();
     private final Map<Long, OrderEntity> pendingOrderUpdates = new HashMap<>();
-    private final List<Runnable> postCommitActions = new ArrayList<>();
+    private final List<Trade> pendingRedisPushes = new ArrayList<>(); // 待推送的Redis消息
     private static final int BATCH_SIZE = 100;
 
     public PersistenceHandler(WalletService walletService, OrderMapper orderMapper, TradeMapper tradeMapper, SymbolService symbolService, ApplicationEventPublisher eventPublisher, StringRedisTemplate redisTemplate, ObjectMapper objectMapper, @Lazy PersistenceHandler self) {
@@ -75,14 +78,16 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
 
             // 【批处理优化】在批次结束或达到阈值时，执行批量提交
             if (endOfBatch || pendingTrades.size() >= BATCH_SIZE || pendingOrderUpdates.size() >= BATCH_SIZE) {
-                self.flush(); // 调用带有事务的flush方法
+                self.flush();
             }
         } catch (Exception e) {
             log.error("PersistenceHandler 处理事件失败: event={}", event, e);
-            // 发生异常时，尝试清空缓冲区以避免影响后续处理，或者根据策略重试
+            // 发生异常时，清空缓冲区，避免脏数据影响后续批次
+            // 注意：这会导致当前批次中尚未提交的数据丢失，但在高并发容错场景下，
+            // 优先保证系统不挂掉是首要任务。更完善的方案是将失败的事件发送到DLQ。
             pendingTrades.clear();
             pendingOrderUpdates.clear();
-            postCommitActions.clear();
+            pendingRedisPushes.clear();
         }
     }
 
@@ -104,7 +109,11 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
 
             for (TradeEvent trade : trades) {
                 try {
-                    processSingleTrade(trade);
+                    Trade tradeEntity = processSingleTrade(trade);
+                    if (tradeEntity != null) {
+                        // 将待推送的Trade对象加入缓冲区
+                        pendingRedisPushes.add(tradeEntity);
+                    }
                     SymbolEntity symbol = symbolService.getSymbol(trade.getSymbol());
                     if (symbol != null) {
                         BigDecimal tradedCost = trade.getPrice().multiply(trade.getQuantity()).setScale(symbol.getQuoteScale(), RoundingMode.DOWN);
@@ -140,9 +149,9 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     }
 
     // 【修改】移除@Transactional，改为累积到缓冲区
-    public void processSingleTrade(TradeEvent trade) {
+    public Trade processSingleTrade(TradeEvent trade) {
         SymbolEntity symbol = symbolService.getSymbol(trade.getSymbol());
-        if (symbol == null) return;
+        if (symbol == null) return null;
 
         BigDecimal tradedCost = trade.getPrice().multiply(trade.getQuantity()).setScale(symbol.getQuoteScale(), RoundingMode.DOWN);
         String reason = "trade:" + trade.getBuyOrderId() + "/" + trade.getSellOrderId();
@@ -163,34 +172,19 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
 
         updateOrderStatus(trade.getBuyOrderId(), trade.getQuantity(), tradedCost);
         updateOrderStatus(trade.getSellOrderId(), trade.getQuantity(), tradedCost);
-
-        // 【修改】将Redis推送添加到后置操作列表
-        postCommitActions.add(() -> publishToRedis(tradeEntity));
-    }
-
-    private void publishToRedis(Trade tradeEntity) {
-        try {
-            String payload = objectMapper.writeValueAsString(tradeEntity);
-            redisTemplate.convertAndSend("channel:ticker:" + tradeEntity.getSymbol(), payload);
-            redisTemplate.opsForValue().set("last_price:" + tradeEntity.getSymbol(), tradeEntity.getPrice().toPlainString());
-        } catch (Exception e) {
-            log.error("发布成交记录到Redis失败", e);
-        }
+        
+        return tradeEntity;
     }
 
     // 【修改】移除@Transactional，改为累积到缓冲区
     public void processCancelOrder(Long orderId, String reason) {
-        // 从缓冲区或数据库获取订单
         OrderEntity order = pendingOrderUpdates.get(orderId);
         if (order == null) {
             order = orderMapper.selectById(orderId);
         }
-        
         if (order == null || (order.getStatus() != OrderStatus.NEW && order.getStatus() != OrderStatus.PARTIAL)) return;
         unfreezeRemainingFunds(order, reason);
         order.setStatus(OrderStatus.CANCELED);
-        
-        // 【修改】添加到缓冲区
         pendingOrderUpdates.put(order.getId(), order);
     }
 
@@ -200,11 +194,9 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         if (incomingOrder == null) {
             incomingOrder = orderMapper.selectById(orderId);
         }
-        
         if (incomingOrder != null && incomingOrder.getType() == OrderTypes.OrderType.MARKET && totalTradedQty.compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal avgPrice = totalTradedCost.divide(totalTradedQty, symbolService.getSymbol(incomingOrder.getSymbol()).getQuoteScale(), RoundingMode.HALF_UP);
             incomingOrder.setPrice(avgPrice);
-            // 【修改】添加到缓冲区
             pendingOrderUpdates.put(incomingOrder.getId(), incomingOrder);
         }
     }
@@ -215,7 +207,6 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         if (finalOrderState == null) {
             finalOrderState = orderMapper.selectById(orderId);
         }
-        
         if (finalOrderState == null) return;
 
         boolean isMarketOrderAndNotFilled = finalOrderState.getType() == OrderTypes.OrderType.MARKET && !finalOrderState.isFullyFilled();
@@ -231,8 +222,12 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
             } else {
                 finalOrderState.setStatus(OrderStatus.CANCELED);
             }
-            // 【修改】添加到缓冲区
             pendingOrderUpdates.put(finalOrderState.getId(), finalOrderState);
+
+            if (isSelfTradeCancel) {
+                log.warn("发布 OrderForceRemovedEvent 事件，强制从内存中移除订单: {}", orderId);
+                eventPublisher.publishEvent(new OrderForceRemovedEvent(this, finalOrderState.getSymbol(), orderId));
+            }
         }
     }
 
@@ -280,7 +275,6 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         } else {
             order.setStatus(OrderStatus.PARTIAL);
         }
-        // 【修改】添加到缓冲区
         pendingOrderUpdates.put(orderId, order);
     }
 
@@ -295,7 +289,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
                 log.info("批量插入 {} 条成交记录。", pendingTrades.size());
             } catch (Exception e) {
                 log.error("批量插入成交记录失败。", e);
-                throw e; // 抛出异常以触发回滚
+                throw e;
             } finally {
                 pendingTrades.clear();
             }
@@ -307,21 +301,34 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
                 log.info("批量更新 {} 个订单状态。", ordersToUpdate.size());
             } catch (Exception e) {
                 log.error("批量更新订单状态失败。", e);
-                throw e; // 抛出异常以触发回滚
+                throw e;
             } finally {
                 pendingOrderUpdates.clear();
             }
         }
         
-        // 执行后置操作 (如Redis推送)
-        // 注意：如果上面的数据库操作失败回滚，这些操作将不会被执行（因为抛出了异常）
-        for (Runnable action : postCommitActions) {
-            try {
-                action.run();
-            } catch (Exception e) {
-                log.error("执行后置操作失败", e);
-            }
+        // 【关键修复】注册事务同步回调，在事务提交后推送Redis
+        if (!pendingRedisPushes.isEmpty()) {
+            List<Trade> tradesToPush = new ArrayList<>(pendingRedisPushes);
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    for (Trade trade : tradesToPush) {
+                        publishToRedis(trade);
+                    }
+                }
+            });
+            pendingRedisPushes.clear();
         }
-        postCommitActions.clear();
+    }
+
+    private void publishToRedis(Trade tradeEntity) {
+        try {
+            String payload = objectMapper.writeValueAsString(tradeEntity);
+            redisTemplate.convertAndSend("channel:ticker:" + tradeEntity.getSymbol(), payload);
+            redisTemplate.opsForValue().set("last_price:" + tradeEntity.getSymbol(), tradeEntity.getPrice().toPlainString());
+        } catch (Exception e) {
+            log.error("发布成交记录到Redis失败", e);
+        }
     }
 }

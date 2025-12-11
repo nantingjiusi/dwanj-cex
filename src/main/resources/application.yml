@@ -47,3 +47,4 @@ logging:
   level:
     org.mybatis: info
     com.remus.dwanjcex.wallet.mapper: info
+    org.apache.kafka.clients.producer: WARN
