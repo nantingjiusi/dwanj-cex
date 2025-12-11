@@ -92,8 +92,7 @@ public class MarketOrderMatchStrategy implements MatchStrategy {
     }
 
     private void processTrade(OrderEntity buyOrder, OrderEntity sellOrder, BigDecimal price, BigDecimal tradedQty, OrderBook orderBook, DisruptorEvent event) {
-        log.info(">>> 撮合成功: BuyOrder[{}] vs SellOrder[{}] | Price: {} | Qty: {}", 
-                buyOrder.getId(), sellOrder.getId(), price, tradedQty);
+
 
         BigDecimal cost = tradedQty.multiply(price);
         
@@ -102,7 +101,8 @@ public class MarketOrderMatchStrategy implements MatchStrategy {
         sellOrder.addFilled(tradedQty);
 
         event.addTradeEvent(createTradeEvent(buyOrder, sellOrder, price, tradedQty));
-
+        log.info(">>> 撮合成功: BuyOrder[{}] vs SellOrder[{}] | Price: {} | Qty: {}",
+                buyOrder.getId(), sellOrder.getId(), price, tradedQty);
         if (buyOrder.isFullyFilled()) {
             orderBook.remove(buyOrder.getId());
         }

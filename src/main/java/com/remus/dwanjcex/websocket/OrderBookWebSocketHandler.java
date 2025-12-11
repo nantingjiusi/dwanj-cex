@@ -1,14 +1,15 @@
 package com.remus.dwanjcex.websocket;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.remus.dwanjcex.config.jwt.JwtUtils;
-import com.remus.dwanjcex.disruptor.handler.MatchingHandler;
 import com.remus.dwanjcex.wallet.entity.dto.OrderBookLevel;
 import com.remus.dwanjcex.websocket.dto.WebSocketPushMessage;
 import com.remus.dwanjcex.websocket.dto.WebSocketRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.socket.CloseStatus;
@@ -27,7 +28,7 @@ import java.util.Map;
 public class OrderBookWebSocketHandler extends TextWebSocketHandler {
 
     private final WebSocketPushService pushService;
-    private final MatchingHandler matchingHandler;
+    private final StringRedisTemplate redisTemplate; // 注入RedisTemplate
     private final ObjectMapper objectMapper;
     private final JwtUtils jwtUtils;
 
@@ -97,16 +98,20 @@ public class OrderBookWebSocketHandler extends TextWebSocketHandler {
 
     private void sendInitialSnapshot(WebSocketSession session, String topic) throws IOException {
         String symbol = topic.substring("orderbook:".length());
-        Map<String, List<OrderBookLevel>> snapshot = matchingHandler.getOrderBookSnapshot(symbol);
-        if (snapshot != null && !snapshot.isEmpty()) {
+        // 【修改】从Redis读取订单簿快照的JSON字符串
+        String snapshotJson = redisTemplate.opsForValue().get("orderbook_display_snapshot:" + symbol);
+        if (snapshotJson != null) {
+            Map<String, List<OrderBookLevel>> snapshot = objectMapper.readValue(snapshotJson, new TypeReference<>() {});
             sendMessage(session, topic, snapshot);
         }
     }
 
     private void sendInitialTicker(WebSocketSession session, String topic) throws IOException {
         String symbol = topic.substring("ticker:".length());
-        BigDecimal lastPrice = pushService.getLastPrice(symbol);
-        if (lastPrice.compareTo(BigDecimal.ZERO) > 0) {
+        // 【修改】从Redis读取最新价格
+        String priceStr = redisTemplate.opsForValue().get("last_price:" + symbol);
+        if (priceStr != null) {
+            BigDecimal lastPrice = new BigDecimal(priceStr);
             log.info("向 session {} 发送了 {} 的初始价格: {}", session.getId(), symbol, lastPrice);
             sendMessage(session, topic, lastPrice);
         }

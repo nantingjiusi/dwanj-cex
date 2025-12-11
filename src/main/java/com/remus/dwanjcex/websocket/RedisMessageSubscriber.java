@@ -26,7 +26,7 @@ public class RedisMessageSubscriber implements MessageListener {
     public void onMessage(Message message, byte[] pattern) {
         String channel = new String(message.getChannel());
         String body = new String(message.getBody());
-        log.debug("收到Redis消息: channel={}, body={}", channel, body);
+        log.debug("收到Redis Pub/Sub消息: channel={}", channel);
 
         try {
             if (channel.startsWith("channel:orderbook:")) {
@@ -38,14 +38,11 @@ public class RedisMessageSubscriber implements MessageListener {
                 String symbol = channel.substring("channel:ticker:".length());
                 Trade trade = objectMapper.readValue(body, Trade.class);
                 
-                // 更新最新价格缓存
+                // 【关键修复】只更新缓存，不执行任何推送逻辑
                 webSocketPushService.updateLastPrice(symbol, trade.getPrice());
-                
-                // 执行节流推送
-                webSocketPushService.throttlePushTicker(symbol, trade.getPrice());
             }
         } catch (IOException e) {
-            log.error("处理Redis消息失败", e);
+            log.error("处理Redis消息失败: channel={}, body={}", channel, body, e);
         }
     }
 }

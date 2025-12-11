@@ -1,4 +1,5 @@
 import { reactive } from 'vue';
+import { useToast } from './useToast'; // 【新增】导入useToast
 
 export const orderBookState = reactive({
   bids: [],
@@ -13,15 +14,16 @@ export const tickerState = reactive({
 });
 
 const WEBSOCKET_URL = 'ws://localhost:8080/ws/v1';
-const TICKER_PRICE_KEY = 'cex_last_price'; // localStorage key
+const TICKER_PRICE_KEY = 'cex_last_price';
 
-// 初始化时从localStorage恢复价格
+const { showToast } = useToast(); // 【新增】获取showToast函数
+
 const storedPrice = localStorage.getItem(TICKER_PRICE_KEY);
 if (storedPrice) {
   const price = parseFloat(storedPrice);
   if (!isNaN(price)) {
     tickerState.price = price;
-    tickerState.lastPrice = price; // 初始化时lastPrice等于price，避免显示涨跌颜色
+    tickerState.lastPrice = price;
   }
 }
 
@@ -50,14 +52,15 @@ export function connectWebSocket(symbol) {
       if (!isNaN(newPrice)) {
         tickerState.lastPrice = tickerState.price;
         tickerState.price = newPrice;
-        // 【关键修复】将最新价格存入localStorage
         localStorage.setItem(TICKER_PRICE_KEY, newPrice.toString());
       }
     } else if (message.event === 'auth') {
       console.log('WebSocket authentication status:', message.status);
     } else if (message.topic && message.topic.startsWith('private:')) {
-      console.log('Received private message:', message);
-      alert(`Order Update: \nStatus: ${message.data.status}\nReason: ${message.data.reason}\nOrder ID: ${message.data.orderId}`);
+      // 【修改】使用Toast替代alert
+      const notification = message.data;
+      const toastMessage = `Order ${notification.orderId}: ${notification.status} - ${notification.reason}`;
+      showToast(toastMessage, { type: 'info', duration: 5000 });
     }
   };
 

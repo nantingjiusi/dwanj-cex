@@ -3,7 +3,10 @@ package com.remus.dwanjcex;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.remus.dwanjcex.common.OrderTypes;
-import org.springframework.http.*;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
@@ -13,7 +16,6 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
 public class MarketMakerBot {
 
@@ -21,7 +23,7 @@ public class MarketMakerBot {
     private static final RestTemplate restTemplate = new RestTemplate();
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
-    private static final int USER_COUNT = 20; // 【修改】减少并发用户数，降低压力
+    private static final int USER_COUNT = 10; // 【修改】减少并发用户数，降低压力
     private static final String SYMBOL = "BTCUSDT";
     private static final BigDecimal INITIAL_USDT = new BigDecimal("1000000");
     private static final BigDecimal INITIAL_BTC = new BigDecimal("100");
@@ -75,7 +77,7 @@ public class MarketMakerBot {
                         restTemplate.postForEntity(API_BASE_URL + "/api/order/place", request, String.class);
                         
                         // 【修改】增加下单间隔，避免压垮后端
-                        Thread.sleep(random.nextInt(500) + 500); // 500-1000ms 间隔
+                        Thread.sleep(random.nextInt(1500) + 500); // 500-1000ms 间隔
                     } catch (Exception e) {
                         System.err.println("An error occurred while placing order for " + bot.username + ": " + e.getMessage());
                         try {

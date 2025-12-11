@@ -7,6 +7,7 @@ import com.remus.dwanjcex.websocket.event.OrderCancelNotificationEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -17,7 +18,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
-import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Service
@@ -30,29 +30,33 @@ public class WebSocketPushService {
     private final Map<Long, WebSocketSession> userSessions = new ConcurrentHashMap<>();
     
     private final Map<String, BigDecimal> lastPrices = new ConcurrentHashMap<>(); 
-    private final Map<String, AtomicLong> tickerPushTimestamps = new ConcurrentHashMap<>();
-    private static final long TICKER_PUSH_INTERVAL_MS = 100;
-
-    // 【修改】移除所有Spring事件监听器
+    private final Map<String, BigDecimal> lastPushedPrices = new ConcurrentHashMap<>();
 
     public void updateLastPrice(String symbol, BigDecimal price) {
         this.lastPrices.put(symbol, price);
     }
 
-    public void throttlePushTicker(String symbol, BigDecimal price) {
-        AtomicLong lastPushTime = tickerPushTimestamps.computeIfAbsent(symbol, k -> new AtomicLong(0));
-        long now = System.currentTimeMillis();
-        long lastTime = lastPushTime.get();
-
-        if ((now - lastTime) > TICKER_PUSH_INTERVAL_MS) {
-            if (lastPushTime.compareAndSet(lastTime, now)) {
-                String topic = "ticker:" + symbol;
-                broadcast(topic, price);
-            }
+    /**
+     * 【关键修复】恢复定时任务，作为唯一的推送者
+     */
+    @Scheduled(fixedRate = 200) // 使用200ms以获得更平滑的体验
+    public void pushTickerUpdates() {
+        if (lastPrices.isEmpty()) {
+            return;
         }
+
+        lastPrices.forEach((symbol, currentPrice) -> {
+            BigDecimal lastPushed = lastPushedPrices.get(symbol);
+            
+            if (lastPushed == null || currentPrice.compareTo(lastPushed) != 0) {
+                String topic = "ticker:" + symbol;
+                broadcast(topic, currentPrice);
+                lastPushedPrices.put(symbol, currentPrice);
+            }
+        });
     }
 
-    @EventListener // 这个仍然监听内部事件，用于用户取消订单的私有消息
+    @EventListener
     public void handleOrderCancelNotification(OrderCancelNotificationEvent event) {
         Long userId = event.getUserId();
         String topic = "private:" + userId;
