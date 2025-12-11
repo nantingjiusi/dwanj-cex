@@ -35,7 +35,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     private final TradeMapper tradeMapper;
     private final SymbolService symbolService;
     private final ApplicationEventPublisher eventPublisher;
-    
+
     private final PersistenceHandler self;
 
     // 【关键修复】使用 @Lazy 打破循环依赖
@@ -85,7 +85,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
             for (TradeEvent trade : trades) {
                 try {
                     self.processSingleTrade(trade);
-                    
+
                     SymbolEntity symbol = symbolService.getSymbol(trade.getSymbol());
                     if (symbol != null) {
                         BigDecimal tradedCost = trade.getPrice().multiply(trade.getQuantity()).setScale(symbol.getQuoteScale(), RoundingMode.DOWN);
@@ -130,7 +130,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         String reason = "trade:" + trade.getBuyOrderId() + "/" + trade.getSellOrderId();
         walletService.reduceFrozen(trade.getBuyerUserId(), symbol.getQuoteCoin(), tradedCost, reason);
         walletService.reduceFrozen(trade.getSellerUserId(), symbol.getBaseCoin(), trade.getQuantity(), reason);
-        
+
         walletService.settleCredit(trade.getBuyerUserId(), symbol.getBaseCoin(), trade.getQuantity(), reason);
         walletService.settleCredit(trade.getSellerUserId(), symbol.getQuoteCoin(), tradedCost, reason);
 
@@ -177,13 +177,13 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
 
         if (isSelfTradeCancel || isMarketOrderAndNotFilled) {
             String reason = isSelfTradeCancel ? "Self-trade detected" : "Market order closed due to insufficient depth";
-            
+
             if (finalOrderState.getType() == OrderTypes.OrderType.MARKET && finalOrderState.getSide() == OrderTypes.Side.BUY) {
                 finalOrderState.setAmount(finalOrderState.getFilled());
             }
 
             unfreezeRemainingFunds(finalOrderState, reason);
-            
+
             if (finalOrderState.getFilled().compareTo(BigDecimal.ZERO) > 0) {
                 finalOrderState.setStatus(OrderStatus.PARTIALLY_FILLED_AND_CLOSED);
             } else {
@@ -224,7 +224,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     private void updateOrderStatus(Long orderId, BigDecimal tradedQty, BigDecimal tradedCost) {
         OrderEntity order = orderMapper.selectById(orderId);
         if (order == null) return;
-        
+
         order.addFilled(tradedQty);
         if (order.getType() == OrderTypes.OrderType.MARKET && order.getSide() == OrderTypes.Side.BUY) {
             order.addQuoteFilled(tradedCost);

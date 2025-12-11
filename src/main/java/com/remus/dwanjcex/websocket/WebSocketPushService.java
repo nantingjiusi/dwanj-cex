@@ -2,15 +2,11 @@ package com.remus.dwanjcex.websocket;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.remus.dwanjcex.wallet.entity.Trade;
 import com.remus.dwanjcex.websocket.dto.WebSocketPushMessage;
-import com.remus.dwanjcex.websocket.event.OrderBookUpdateEvent;
 import com.remus.dwanjcex.websocket.event.OrderCancelNotificationEvent;
-import com.remus.dwanjcex.websocket.event.TradeExecutedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -34,33 +30,21 @@ public class WebSocketPushService {
     private final Map<Long, WebSocketSession> userSessions = new ConcurrentHashMap<>();
     
     private final Map<String, BigDecimal> lastPrices = new ConcurrentHashMap<>(); 
-    // 【关键修复】使用AtomicLong来保证原子更新
     private final Map<String, AtomicLong> tickerPushTimestamps = new ConcurrentHashMap<>();
     private static final long TICKER_PUSH_INTERVAL_MS = 100;
 
-    @EventListener
-    public void handleOrderBookUpdate(OrderBookUpdateEvent event) {
-        String topic = "orderbook:" + event.getSymbol();
-        broadcast(topic, event.getOrderBookData());
+    // 【修改】移除所有Spring事件监听器
+
+    public void updateLastPrice(String symbol, BigDecimal price) {
+        this.lastPrices.put(symbol, price);
     }
 
-    @Async
-    @EventListener
-    public void handleTradeExecuted(TradeExecutedEvent event) {
-        Trade trade = event.getTrade();
-        String symbol = trade.getSymbol();
-        BigDecimal price = trade.getPrice();
-
-        this.lastPrices.put(symbol, price);
-
-        // 【关键修复】使用CAS原子操作来确保只有一个线程能成功推送
+    public void throttlePushTicker(String symbol, BigDecimal price) {
         AtomicLong lastPushTime = tickerPushTimestamps.computeIfAbsent(symbol, k -> new AtomicLong(0));
-        
         long now = System.currentTimeMillis();
         long lastTime = lastPushTime.get();
 
         if ((now - lastTime) > TICKER_PUSH_INTERVAL_MS) {
-            // 尝试原子地更新时间戳
             if (lastPushTime.compareAndSet(lastTime, now)) {
                 String topic = "ticker:" + symbol;
                 broadcast(topic, price);
@@ -68,7 +52,7 @@ public class WebSocketPushService {
         }
     }
 
-    @EventListener
+    @EventListener // 这个仍然监听内部事件，用于用户取消订单的私有消息
     public void handleOrderCancelNotification(OrderCancelNotificationEvent event) {
         Long userId = event.getUserId();
         String topic = "private:" + userId;
@@ -116,7 +100,7 @@ public class WebSocketPushService {
         return lastPrices.get(symbol);
     }
 
-    private void broadcast(String topic, Object data) {
+    public void broadcast(String topic, Object data) {
         Set<WebSocketSession> subscribers = subscriptions.get(topic);
         if (subscribers == null || subscribers.isEmpty()) {
             return;

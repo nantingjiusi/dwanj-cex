@@ -1,9 +1,12 @@
 package com.remus.dwanjcex.config;
 
+import com.remus.dwanjcex.websocket.RedisMessageSubscriber;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
 @Configuration
@@ -14,14 +17,26 @@ public class RedisConfig {
         RedisTemplate<String, Object> template = new RedisTemplate<>();
         template.setConnectionFactory(connectionFactory);
         
-        // 【推荐】设置Key的序列化器，避免乱码
         template.setKeySerializer(new StringRedisSerializer());
         template.setHashKeySerializer(new StringRedisSerializer());
         
-        // 可以根据需要设置Value的序列化器，例如Jackson2JsonRedisSerializer
-        // template.setValueSerializer(new Jackson2JsonRedisSerializer<>(Object.class));
-        // template.setHashValueSerializer(new Jackson2JsonRedisSerializer<>(Object.class));
-        
         return template;
+    }
+
+    @Bean
+    public RedisMessageListenerContainer redisMessageListenerContainer(
+            RedisConnectionFactory connectionFactory,
+            RedisMessageSubscriber subscriber) {
+        
+        RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+        container.setConnectionFactory(connectionFactory);
+        
+        // 订阅订单簿频道 (使用通配符 *)
+        container.addMessageListener(subscriber, new ChannelTopic("channel:orderbook:*"));
+        
+        // 订阅最新价格频道 (使用通配符 *)
+        container.addMessageListener(subscriber, new ChannelTopic("channel:ticker:*"));
+        
+        return container;
     }
 }
