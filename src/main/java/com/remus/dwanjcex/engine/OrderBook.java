@@ -2,8 +2,6 @@ package com.remus.dwanjcex.engine;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.remus.dwanjcex.common.OrderTypes;
-import com.remus.dwanjcex.disruptor.event.DisruptorEvent;
-import com.remus.dwanjcex.disruptor.event.TradeEvent;
 import com.remus.dwanjcex.wallet.entity.OrderEntity;
 import com.remus.dwanjcex.wallet.entity.dto.OrderBookLevel;
 import lombok.Getter;
@@ -18,6 +16,10 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.stream.Collectors;
 
+/**
+ * 订单簿数据容器。
+ * 只负责存储和基本操作订单数据，不包含任何撮合逻辑。
+ */
 @Slf4j
 @Getter
 @Setter
@@ -56,70 +58,6 @@ public class OrderBook {
             }
         }
         return true;
-    }
-
-    public void match(OrderEntity order, DisruptorEvent event) {
-        if (order.getSide() == OrderTypes.Side.BUY) {
-            matchBuyOrder(order, event);
-        } else {
-            matchSellOrder(order, event);
-        }
-        if (!event.isSelfTradeCancel() && !order.isFullyFilled()) {
-            add(order);
-        }
-    }
-
-    private void matchBuyOrder(OrderEntity buyOrder, DisruptorEvent event) {
-        while (buyOrder.getRemaining().compareTo(BigDecimal.ZERO) > 0) {
-            Optional<Map.Entry<BigDecimal, Deque<OrderEntity>>> bestAskOpt = bestAsk();
-            if (bestAskOpt.isEmpty() || buyOrder.getPrice().compareTo(bestAskOpt.get().getKey()) < 0) break;
-
-            Deque<OrderEntity> askQueue = bestAskOpt.get().getValue();
-            OrderEntity sellOrder = askQueue.peekFirst();
-            if (sellOrder == null) {
-                removePriceLevelIfEmpty(OrderTypes.Side.SELL, bestAskOpt.get().getKey());
-                continue;
-            }
-            if (buyOrder.getUserId().equals(sellOrder.getUserId())) {
-                event.setSelfTradeCancel(true);
-                return;
-            }
-            processTrade(buyOrder, sellOrder, bestAskOpt.get().getKey(), event);
-        }
-    }
-
-    private void matchSellOrder(OrderEntity sellOrder, DisruptorEvent event) {
-        while (sellOrder.getRemaining().compareTo(BigDecimal.ZERO) > 0) {
-            Optional<Map.Entry<BigDecimal, Deque<OrderEntity>>> bestBidOpt = bestBid();
-            if (bestBidOpt.isEmpty() || sellOrder.getPrice().compareTo(bestBidOpt.get().getKey()) > 0) break;
-
-            Deque<OrderEntity> bidQueue = bestBidOpt.get().getValue();
-            OrderEntity buyOrder = bidQueue.peekFirst();
-            if (buyOrder == null) {
-                removePriceLevelIfEmpty(OrderTypes.Side.BUY, bestBidOpt.get().getKey());
-                continue;
-            }
-            if (sellOrder.getUserId().equals(buyOrder.getUserId())) {
-                event.setSelfTradeCancel(true);
-                return;
-            }
-            processTrade(buyOrder, sellOrder, bestBidOpt.get().getKey(), event);
-        }
-    }
-
-    private void processTrade(OrderEntity buyOrder, OrderEntity sellOrder, BigDecimal price, DisruptorEvent event) {
-        BigDecimal tradedQty = buyOrder.getRemaining().min(sellOrder.getRemaining());
-        buyOrder.addFilled(tradedQty);
-        sellOrder.addFilled(tradedQty);
-
-        event.addTradeEvent(TradeEvent.builder()
-                .symbol(symbol).price(price).quantity(tradedQty)
-                .buyOrderId(buyOrder.getId()).sellOrderId(sellOrder.getId())
-                .buyerUserId(buyOrder.getUserId()).sellerUserId(sellOrder.getUserId())
-                .build());
-
-        if (buyOrder.isFullyFilled()) remove(buyOrder.getId());
-        if (sellOrder.isFullyFilled()) remove(sellOrder.getId());
     }
 
     public void removePriceLevelIfEmpty(OrderTypes.Side side, BigDecimal price) {

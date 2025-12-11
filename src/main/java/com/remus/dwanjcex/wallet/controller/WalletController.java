@@ -2,44 +2,49 @@ package com.remus.dwanjcex.wallet.controller;
 
 import com.remus.dwanjcex.config.jwt.UserContextHolder;
 import com.remus.dwanjcex.wallet.entity.UserBalance;
-import com.remus.dwanjcex.wallet.entity.dto.WalletDto;
+
 import com.remus.dwanjcex.wallet.entity.result.ResponseResult;
 import com.remus.dwanjcex.wallet.entity.result.ResultCode;
-import com.remus.dwanjcex.wallet.mapper.UserBalanceMapper;
 import com.remus.dwanjcex.wallet.services.WalletService;
+import lombok.AllArgsConstructor;
+import lombok.Data;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/wallet") // 移动到/api/下以受JWT保护
+@RequestMapping("/api/wallet")
+@AllArgsConstructor
 public class WalletController {
+
     private final WalletService walletService;
-    private final UserBalanceMapper balanceMapper;
-
-    public WalletController(WalletService walletService, UserBalanceMapper balanceMapper) {
-        this.walletService = walletService;
-        this.balanceMapper = balanceMapper;
-    }
-
-    @PostMapping("/deposit")
-    public ResponseResult<String> deposit(@RequestBody WalletDto dto) {
-        walletService.deposit(dto.getUserId(), dto.getAsset(), dto.getAmount(), dto.getRef());
-        return ResponseResult.success("Deposit successful");
-    }
-
-    @PostMapping("/freeze")
-    public ResponseResult<String> freeze(@RequestBody WalletDto dto) {
-        boolean ok = walletService.freeze(dto.getUserId(), dto.getAsset(), dto.getAmount(), dto.getRef());
-        return ok ? ResponseResult.success("frozen") : ResponseResult.error(ResultCode.INSUFFICIENT_BALANCE,"insufficient_balance");
-    }
-
-
 
 
     @GetMapping("/balances")
-    public ResponseResult<List<UserBalance>> balances() {
-        Long userId = UserContextHolder.getCurrentUserId();
-        return ResponseResult.success(balanceMapper.selectByUserId(userId));
+    public ResponseResult<List<UserBalance>> getAllBalances() {
+        Long currentUserId = UserContextHolder.getCurrentUserId();
+        if (currentUserId == null) {
+            return ResponseResult.error(ResultCode.UNAUTHORIZED);
+        }
+        List<UserBalance> balances = walletService.getAllBalances(currentUserId);
+        return ResponseResult.success(balances);
+    }
+
+    // 【临时测试接口】直接充值，用于MarketMakerBot
+    @PostMapping("/deposit")
+    public ResponseResult<?> testDeposit(@RequestBody TestDepositRequest request) {
+        Long currentUserId = UserContextHolder.getCurrentUserId();
+        if (currentUserId == null) {
+            return ResponseResult.error(ResultCode.UNAUTHORIZED);
+        }
+        walletService.deposit(currentUserId, request.getAsset(), request.getAmount(), "manual_test_deposit");
+        return ResponseResult.success();
+    }
+
+    @Data
+    public static class TestDepositRequest {
+        private String asset;
+        private BigDecimal amount;
     }
 }

@@ -38,6 +38,17 @@ public class BuyTest {
     private TradeService tradeService;
 
     @Test
+    public void t_createUser(){
+        Long buyerId = userService.genUser("admin"+ UUID.randomUUID().toString().substring(0,5), "123");
+        walletService.deposit(buyerId, CoinConstant.USDT, new BigDecimal("1000000"),"Deposit");
+        walletService.deposit(buyerId,CoinConstant.BTC,new BigDecimal("50"),"Deposit");
+
+        Long buyerId2 = userService.genUser("admin"+ UUID.randomUUID().toString().substring(0,5), "123");
+        walletService.deposit(buyerId2, CoinConstant.USDT, new BigDecimal("1000000"),"Deposit");
+        walletService.deposit(buyerId2,CoinConstant.BTC,new BigDecimal("50"),"Deposit");
+    }
+
+    @Test
     public void t_cancelOrder(){
         Long buyerId = userService.genUser("admin"+ UUID.randomUUID().toString().substring(0,5), "123");
         System.out.println("Buyer ID: " + buyerId);

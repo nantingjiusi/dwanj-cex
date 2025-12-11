@@ -11,6 +11,7 @@
           <tr>
             <th>ID</th>
             <th>Symbol</th>
+            <th>Type</th>
             <th>Side</th>
             <th>Price</th>
             <th>Amount</th>
@@ -21,16 +22,17 @@
         </thead>
         <tbody>
           <tr v-if="orders.length === 0">
-            <td colspan="8">No orders yet.</td>
+            <td colspan="9">No orders yet.</td>
           </tr>
           <tr v-for="order in orders" :key="order.id" :class="`status-${order.status.toLowerCase()}`">
             <td>{{ order.id }}</td>
             <td>{{ order.symbol }}</td>
+            <td>{{ order.type }}</td>
             <td :class="order.side === 'BUY' ? 'buy-text' : 'sell-text'">{{ order.side }}</td>
             <td>{{ formatAmount(order.price, 2) }}</td>
             <td>{{ formatAmount(order.amount, 6) }}</td>
             <td>{{ formatAmount(order.filled, 6) }}</td>
-            <td>{{ order.status }}</td>
+            <td>{{ formatStatus(order) }}</td>
             <td>
               <button
                 v-if="canBeCanceled(order.status)"
@@ -80,7 +82,6 @@ export default {
       cancelingOrderId.value = orderId;
       try {
         await cancelOrder(orderId);
-        // 成功后，稍等一下再刷新列表，给后端一些处理时间
         setTimeout(() => {
           fetchOrders();
           emit('orderCanceled');
@@ -96,10 +97,15 @@ export default {
       return parseFloat(amount).toFixed(precision);
     };
 
-    // 暴露给父组件调用
+    const formatStatus = (order) => {
+      if (order.status === 'PARTIALLY_FILLED_AND_CLOSED') {
+        return `Partial Filled (${formatAmount(order.filled, 6)}) & Closed`;
+      }
+      return order.status;
+    };
+
     const expose = { fetchOrders };
     emit('expose', expose);
-
 
     return {
       orders,
@@ -110,6 +116,7 @@ export default {
       canBeCanceled,
       handleCancel,
       formatAmount,
+      formatStatus,
     };
   },
 };
@@ -147,6 +154,7 @@ th {
 .sell-text { color: #e15241; }
 .status-filled { background-color: #f0f9eb; }
 .status-canceled { background-color: #fef0f0; text-decoration: line-through; }
+.status-partially_filled_and_closed { background-color: #fffbe6; color: #8a6d3b; } /* 浅黄色 */
 .cancel-btn {
   padding: 2px 6px;
   font-size: 10px;

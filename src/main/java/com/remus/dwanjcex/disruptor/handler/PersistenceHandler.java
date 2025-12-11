@@ -58,89 +58,157 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     }
 
     private void handlePlaceOrderPersistence(DisruptorEvent event) {
-        if (event.isSelfTradeCancel()) {
-            log.warn("[Disruptor - Persistence] 检测到自成交取消标志，开始取消新订单: {}", event.getOrderId());
-            cancelNewOrder(event.getOrderId());
-            return;
-        }
-
+        // 1. 处理有效成交
         List<TradeEvent> trades = event.getTradeEvents();
-        if (trades == null || trades.isEmpty()) {
-            return;
+        if (trades != null && !trades.isEmpty()) {
+            BigDecimal totalTradedQty = BigDecimal.ZERO;
+            BigDecimal totalTradedCost = BigDecimal.ZERO;
+
+            for (TradeEvent trade : trades) {
+                SymbolEntity symbol = symbolService.getSymbol(trade.getSymbol());
+                if (symbol == null) continue;
+
+                BigDecimal tradedCost = trade.getPrice().multiply(trade.getQuantity()).setScale(symbol.getQuoteScale(), RoundingMode.DOWN);
+                totalTradedQty = totalTradedQty.add(trade.getQuantity());
+                totalTradedCost = totalTradedCost.add(tradedCost);
+
+                walletService.reduceFrozen(trade.getBuyerUserId(), symbol.getQuoteCoin(), tradedCost);
+                walletService.reduceFrozen(trade.getSellerUserId(), symbol.getBaseCoin(), trade.getQuantity());
+                walletService.settleCredit(trade.getBuyerUserId(), symbol.getBaseCoin(), trade.getQuantity(), "trade");
+                walletService.settleCredit(trade.getSellerUserId(), symbol.getQuoteCoin(), tradedCost, "trade");
+
+                Trade tradeEntity = Trade.builder()
+                        .buyOrderId(trade.getBuyOrderId()).sellOrderId(trade.getSellOrderId())
+                        .symbol(trade.getSymbol()).price(trade.getPrice()).quantity(trade.getQuantity())
+                        .build();
+                tradeMapper.insert(tradeEntity);
+
+                updateOrderStatus(trade.getBuyOrderId(), trade.getQuantity(), tradedCost);
+                updateOrderStatus(trade.getSellOrderId(), trade.getQuantity(), tradedCost);
+
+                eventPublisher.publishEvent(new TradeExecutedEvent(this, tradeEntity));
+            }
+
+            OrderEntity incomingOrder = orderMapper.selectById(event.getOrderId());
+            if (incomingOrder != null && incomingOrder.getType() == OrderTypes.OrderType.MARKET) {
+                if (totalTradedQty.compareTo(BigDecimal.ZERO) > 0) {
+                    BigDecimal avgPrice = totalTradedCost.divide(totalTradedQty, symbolService.getSymbol(incomingOrder.getSymbol()).getQuoteScale(), RoundingMode.HALF_UP);
+                    incomingOrder.setPrice(avgPrice);
+                    orderMapper.update(incomingOrder);
+                }
+            }
         }
 
-        for (TradeEvent trade : trades) {
-            SymbolEntity symbol = symbolService.getSymbol(trade.getSymbol());
-            if (symbol == null) {
-                log.error("持久化失败：找不到交易对 {}", trade.getSymbol());
-                continue;
+        // 2. 处理新订单的最终状态
+        OrderEntity finalOrderState = orderMapper.selectById(event.getOrderId());
+        if (finalOrderState == null) return;
+
+        // 2.1 如果订单因为STP策略而提前结束
+        if (event.isSelfTradeCancel()) {
+            String reason = "Self-trade detected (Expire Taker)";
+            log.warn("订单 {} 因 '{}' 而关闭，解冻剩余资金。", finalOrderState.getId(), reason);
+
+            if (finalOrderState.getType() == OrderTypes.OrderType.MARKET && finalOrderState.getSide() == OrderTypes.Side.BUY) {
+                finalOrderState.setAmount(finalOrderState.getFilled());
             }
-            BigDecimal tradedAmount = trade.getPrice().multiply(trade.getQuantity()).setScale(symbol.getQuoteScale(), RoundingMode.HALF_UP);
 
-            walletService.reduceFrozen(trade.getBuyerUserId(), symbol.getQuoteCoin(), tradedAmount);
-            walletService.reduceFrozen(trade.getSellerUserId(), symbol.getBaseCoin(), trade.getQuantity());
+            unfreezeRemainingFunds(finalOrderState, reason);
+            
+            if (finalOrderState.getFilled().compareTo(BigDecimal.ZERO) > 0) {
+                finalOrderState.setStatus(OrderStatus.PARTIALLY_FILLED_AND_CLOSED);
+            } else {
+                finalOrderState.setStatus(OrderStatus.CANCELED);
+            }
+            orderMapper.update(finalOrderState);
+            return; // STP策略优先级最高，处理完直接返回
+        }
 
-            walletService.settleCredit(trade.getBuyerUserId(), symbol.getBaseCoin(), trade.getQuantity(), "trade");
-            walletService.settleCredit(trade.getSellerUserId(), symbol.getQuoteCoin(), tradedAmount, "trade");
+        // 2.2 如果是市价单，处理其最终状态 (深度不足)
+        if (finalOrderState.getType() == OrderTypes.OrderType.MARKET) {
+            if (finalOrderState.getSide() == OrderTypes.Side.BUY) {
+                finalOrderState.setAmount(finalOrderState.getFilled());
+            }
 
-            Trade tradeEntity = Trade.builder()
-                    .buyOrderId(trade.getBuyOrderId())
-                    .sellOrderId(trade.getSellOrderId())
-                    .symbol(trade.getSymbol())
-                    .price(trade.getPrice())
-                    .quantity(trade.getQuantity())
-                    .build();
-            tradeMapper.insert(tradeEntity);
-
-            updateOrderStatus(trade.getBuyOrderId(), trade.getQuantity());
-            updateOrderStatus(trade.getSellOrderId(), trade.getQuantity());
-
-            // 发布交易执行事件
-            eventPublisher.publishEvent(new TradeExecutedEvent(this, tradeEntity));
+            if (!finalOrderState.isFullyFilled()) {
+                unfreezeRemainingMarketOrderFunds(finalOrderState);
+                finalOrderState.setStatus(OrderStatus.PARTIALLY_FILLED_AND_CLOSED);
+                eventPublisher.publishEvent(new OrderCancelNotificationEvent(this, finalOrderState.getUserId(), finalOrderState.getId(), "Market order closed due to insufficient depth"));
+            }
+            orderMapper.update(finalOrderState);
         }
     }
 
     private void handleCancelOrderPersistence(DisruptorEvent event) {
         CancelOrderDto dto = event.getCancelOrder();
-        cancelExistingOrder(dto.getOrderId());
+        cancelExistingOrder(dto.getOrderId(), "Cancelled by user");
     }
 
-    private void cancelNewOrder(Long orderId) {
-        OrderEntity order = orderMapper.selectById(orderId);
-        if (order == null) return;
-        updateAndUnfreeze(order, "Self-trade detected");
-    }
-
-    private void cancelExistingOrder(Long orderId) {
+    private void cancelExistingOrder(Long orderId, String reason) {
         OrderEntity order = orderMapper.selectById(orderId);
         if (order == null) return;
         if (order.getStatus() != OrderStatus.NEW && order.getStatus() != OrderStatus.PARTIAL) return;
-        updateAndUnfreeze(order, "Cancelled by user");
-    }
-
-    private void updateAndUnfreeze(OrderEntity order, String reason) {
+        unfreezeRemainingFunds(order, reason);
         order.setStatus(OrderStatus.CANCELED);
         orderMapper.update(order);
+    }
 
-        BigDecimal remaining = order.getRemaining();
-        if (remaining.compareTo(BigDecimal.ZERO) > 0) {
-            SymbolEntity symbol = symbolService.getSymbol(order.getSymbol());
-            if (symbol == null) return;
+    private void unfreezeRemainingMarketOrderFunds(OrderEntity order) {
+        SymbolEntity symbol = symbolService.getSymbol(order.getSymbol());
+        if (symbol == null) {
+            log.error("解冻失败：找不到交易对 {}", order.getSymbol());
+            return;
+        }
 
-            if (order.getSide() == OrderTypes.Side.BUY) {
-                BigDecimal remainingAmount = order.getPrice().multiply(remaining).setScale(symbol.getQuoteScale(), RoundingMode.HALF_UP);
-                walletService.unfreeze(order.getUserId(), symbol.getQuoteCoin(), remainingAmount, "cancel:" + order.getId());
-            } else {
-                walletService.unfreeze(order.getUserId(), symbol.getBaseCoin(), remaining, "cancel:" + order.getId());
+        if (order.getSide() == OrderTypes.Side.BUY) {
+            BigDecimal remainingQuote = order.getQuoteAmount().subtract(order.getQuoteFilled());
+            if (remainingQuote.compareTo(BigDecimal.ZERO) > 0) {
+                walletService.unfreeze(order.getUserId(), symbol.getQuoteCoin(), remainingQuote, "market_partial_unfreeze:" + order.getId());
+            }
+        } else { // SELL
+            BigDecimal remainingQty = order.getAmount().subtract(order.getFilled());
+            if (remainingQty.compareTo(BigDecimal.ZERO) > 0) {
+                walletService.unfreeze(order.getUserId(), symbol.getBaseCoin(), remainingQty, "market_partial_unfreeze:" + order.getId());
+            }
+        }
+    }
+
+    private void unfreezeRemainingFunds(OrderEntity order, String reason) {
+        if (order.getStatus() == OrderStatus.CANCELED || order.getStatus() == OrderStatus.FILLED || order.getStatus() == OrderStatus.PARTIALLY_FILLED_AND_CLOSED) {
+            return;
+        }
+
+        SymbolEntity symbol = symbolService.getSymbol(order.getSymbol());
+        if (symbol == null) return;
+
+        if (order.getSide() == OrderTypes.Side.BUY) {
+            BigDecimal amountToUnfreeze;
+            if (order.getType() == OrderTypes.OrderType.LIMIT) {
+                BigDecimal remainingQty = order.getAmount().subtract(order.getFilled());
+                amountToUnfreeze = order.getPrice().multiply(remainingQty).setScale(symbol.getQuoteScale(), RoundingMode.HALF_UP);
+            } else { // MARKET BUY
+                amountToUnfreeze = order.getQuoteAmount().subtract(order.getQuoteFilled());
+            }
+            if (amountToUnfreeze.compareTo(BigDecimal.ZERO) > 0) {
+                walletService.unfreeze(order.getUserId(), symbol.getQuoteCoin(), amountToUnfreeze, reason + ":" + order.getId());
+            }
+        } else { // SELL
+            BigDecimal remainingQty = order.getAmount().subtract(order.getFilled());
+            if (remainingQty.compareTo(BigDecimal.ZERO) > 0) {
+                walletService.unfreeze(order.getUserId(), symbol.getBaseCoin(), remainingQty, reason + ":" + order.getId());
             }
         }
         eventPublisher.publishEvent(new OrderCancelNotificationEvent(this, order.getUserId(), order.getId(), reason));
     }
 
-    private void updateOrderStatus(Long orderId, BigDecimal tradedQty) {
+    private void updateOrderStatus(Long orderId, BigDecimal tradedQty, BigDecimal tradedCost) {
         OrderEntity order = orderMapper.selectById(orderId);
         if (order == null) return;
+
         order.addFilled(tradedQty);
+        if (order.getType() == OrderTypes.OrderType.MARKET && order.getSide() == OrderTypes.Side.BUY) {
+            order.addQuoteFilled(tradedCost);
+        }
+
         if (order.isFullyFilled()) {
             order.setStatus(OrderStatus.FILLED);
         } else {

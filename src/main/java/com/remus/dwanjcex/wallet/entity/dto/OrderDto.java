@@ -16,11 +16,17 @@ import java.math.BigDecimal;
 @AllArgsConstructor
 @Builder
 public class OrderDto {
-    private Long userId;          // 用户ID
-    private String symbol;        // 交易对，例如 BTCUSDT
-    private BigDecimal price;     // 下单价格
-    private BigDecimal amount;    // 下单数量
-    private OrderTypes.Side side;      // 买卖方向：BUY 或 SELL
+    private Long userId;
+    private String symbol;
+    private OrderTypes.OrderType type;
+    private OrderTypes.Side side;
 
+    // 对于限价单，此字段必须提供。对于市价单，此字段将被忽略。
+    private BigDecimal price;
 
+    // 对于限价单和市价卖单，这是指基础货币的数量 (e.g., 多少个BTC)
+    private BigDecimal amount;
+
+    // 仅用于市价买单，指报价货币的金额 (e.g., 花多少USDT去买)
+    private BigDecimal quoteAmount;
 }

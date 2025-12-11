@@ -41,28 +41,48 @@ public class OrderService {
             throw new BusinessException(ResultCode.SYMBOL_NOT_SUPPORTED);
         }
 
-        OrderEntity order = OrderEntity.builder()
+        OrderEntity.OrderEntityBuilder builder = OrderEntity.builder()
                 .userId(dto.getUserId())
                 .symbol(dto.getSymbol())
-                .price(dto.getPrice())
-                .amount(dto.getAmount())
+                .type(dto.getType())
                 .side(dto.getSide())
-                .status(OrderStatus.NEW)
-                .build();
+                .status(OrderStatus.NEW);
+
+        if (dto.getType() == OrderTypes.OrderType.LIMIT) {
+            builder.price(dto.getPrice()).amount(dto.getAmount());
+        } else { // MARKET
+            builder.price(BigDecimal.ZERO); // 市价单价格存为0
+            if (dto.getSide() == OrderTypes.Side.BUY) {
+                builder.quoteAmount(dto.getQuoteAmount());
+            } else {
+                builder.amount(dto.getAmount());
+            }
+        }
+
+        OrderEntity order = builder.build();
         orderMapper.insert(order);
 
-        boolean freezeOk;
-        if (dto.getSide() == OrderTypes.Side.BUY) {
-            BigDecimal amountToFreeze = dto.getPrice().multiply(dto.getAmount()).setScale(symbol.getQuoteScale(), RoundingMode.HALF_UP);
-            freezeOk = walletService.freeze(dto.getUserId(), symbol.getQuoteCoin(), amountToFreeze, "order:" + order.getId());
-            if (!freezeOk) throw new BusinessException(ResultCode.INSUFFICIENT_QUOTE);
-        } else {
-            freezeOk = walletService.freeze(dto.getUserId(), symbol.getBaseCoin(), dto.getAmount(), "order:" + order.getId());
-            if (!freezeOk) throw new BusinessException(ResultCode.INSUFFICIENT_BASE);
-        }
+        freezeFunds(order, symbol);
 
         eventPublisher.publishEvent(new OrderCreatedEvent(this, order.getId(), dto));
         return order;
+    }
+
+    private void freezeFunds(OrderEntity order, SymbolEntity symbol) {
+        boolean freezeOk;
+        if (order.getSide() == OrderTypes.Side.BUY) {
+            BigDecimal amountToFreeze;
+            if (order.getType() == OrderTypes.OrderType.LIMIT) {
+                amountToFreeze = order.getPrice().multiply(order.getAmount()).setScale(symbol.getQuoteScale(), RoundingMode.HALF_UP);
+            } else { // MARKET BUY
+                amountToFreeze = order.getQuoteAmount();
+            }
+            freezeOk = walletService.freeze(order.getUserId(), symbol.getQuoteCoin(), amountToFreeze, "order:" + order.getId());
+            if (!freezeOk) throw new BusinessException(ResultCode.INSUFFICIENT_QUOTE);
+        } else { // SELL
+            freezeOk = walletService.freeze(order.getUserId(), symbol.getBaseCoin(), order.getAmount(), "order:" + order.getId());
+            if (!freezeOk) throw new BusinessException(ResultCode.INSUFFICIENT_BASE);
+        }
     }
 
     @Transactional
@@ -74,11 +94,15 @@ public class OrderService {
         if (!Objects.equals(order.getUserId(), userId)) {
             throw new BusinessException(ResultCode.ORDER_NOT_BELONG_TO_USER);
         }
+        // 只有NEW或PARTIAL状态的订单才能被取消
         if (order.getStatus() != OrderStatus.NEW && order.getStatus() != OrderStatus.PARTIAL) {
             throw new BusinessException(ResultCode.ORDER_CANNOT_BE_CANCELED);
         }
 
+        // 创建取消订单的DTO，包含所有必要信息
         CancelOrderDto cancelDto = new CancelOrderDto(orderId, userId, order.getSymbol(), order.getSide());
+
+        // 发布取消订单的Spring事件，由Disruptor异步处理
         eventPublisher.publishEvent(new OrderCancelEvent(this, cancelDto));
     }
 
@@ -86,11 +110,6 @@ public class OrderService {
         return matchingHandler.getOrderBookSnapshot(symbol);
     }
 
-    /**
-     * 获取指定用户的所有订单。
-     * @param userId 用户ID
-     * @return 订单列表
-     */
     public List<OrderEntity> getMyOrders(Long userId) {
         return orderMapper.selectByUserId(userId);
     }

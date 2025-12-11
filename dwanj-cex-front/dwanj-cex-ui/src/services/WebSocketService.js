@@ -13,6 +13,18 @@ export const tickerState = reactive({
 });
 
 const WEBSOCKET_URL = 'ws://localhost:8080/ws/v1';
+const TICKER_PRICE_KEY = 'cex_last_price'; // localStorage key
+
+// 初始化时从localStorage恢复价格
+const storedPrice = localStorage.getItem(TICKER_PRICE_KEY);
+if (storedPrice) {
+  const price = parseFloat(storedPrice);
+  if (!isNaN(price)) {
+    tickerState.price = price;
+    tickerState.lastPrice = price; // 初始化时lastPrice等于price，避免显示涨跌颜色
+  }
+}
+
 let socket = null;
 
 export function connectWebSocket(symbol) {
@@ -34,8 +46,13 @@ export function connectWebSocket(symbol) {
       orderBookState.bids = data.bids || [];
       orderBookState.asks = data.asks || [];
     } else if (message.topic === `ticker:${symbol}`) {
-      tickerState.lastPrice = tickerState.price;
-      tickerState.price = message.data;
+      const newPrice = parseFloat(message.data);
+      if (!isNaN(newPrice)) {
+        tickerState.lastPrice = tickerState.price;
+        tickerState.price = newPrice;
+        // 【关键修复】将最新价格存入localStorage
+        localStorage.setItem(TICKER_PRICE_KEY, newPrice.toString());
+      }
     } else if (message.event === 'auth') {
       console.log('WebSocket authentication status:', message.status);
     } else if (message.topic && message.topic.startsWith('private:')) {

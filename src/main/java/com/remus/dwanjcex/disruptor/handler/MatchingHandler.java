@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lmax.disruptor.EventHandler;
 import com.remus.dwanjcex.disruptor.event.DisruptorEvent;
 import com.remus.dwanjcex.engine.OrderBook;
+import com.remus.dwanjcex.engine.strategy.MatchStrategy;
+import com.remus.dwanjcex.engine.strategy.MatchStrategyFactory;
 import com.remus.dwanjcex.wallet.entity.OrderEntity;
 import com.remus.dwanjcex.wallet.entity.dto.CancelOrderDto;
 import com.remus.dwanjcex.wallet.entity.dto.OrderBookLevel;
@@ -16,6 +18,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,13 +32,15 @@ public class MatchingHandler implements EventHandler<DisruptorEvent> {
     private final ApplicationEventPublisher eventPublisher;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    private final MatchStrategyFactory strategyFactory;
 
     private volatile Map<String, Map<String, List<OrderBookLevel>>> snapshotCache = new ConcurrentHashMap<>();
 
-    public MatchingHandler(ApplicationEventPublisher eventPublisher, StringRedisTemplate redisTemplate, ObjectMapper objectMapper) {
+    public MatchingHandler(ApplicationEventPublisher eventPublisher, StringRedisTemplate redisTemplate, ObjectMapper objectMapper, MatchStrategyFactory strategyFactory) {
         this.eventPublisher = eventPublisher;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
+        this.strategyFactory = strategyFactory;
     }
 
     @Override
@@ -67,11 +72,16 @@ public class MatchingHandler implements EventHandler<DisruptorEvent> {
                 .id(event.getOrderId())
                 .userId(dto.getUserId())
                 .symbol(dto.getSymbol())
+                .type(dto.getType())
                 .price(dto.getPrice())
                 .amount(dto.getAmount())
+                .quoteAmount(dto.getQuoteAmount())
                 .side(dto.getSide())
                 .build();
-        orderBook.match(order, event);
+
+        MatchStrategy strategy = strategyFactory.getStrategy(order.getType());
+        strategy.match(order, orderBook, event);
+
         return dto.getSymbol();
     }
 
@@ -86,24 +96,23 @@ public class MatchingHandler implements EventHandler<DisruptorEvent> {
     }
 
     private void updateSnapshotAndPublish(String symbol, OrderBook orderBook) {
+        // 1. 更新用于HTTP API和WebSocket初始推送的快照缓存
         Map<String, List<OrderBookLevel>> snapshot = orderBook.getOrderBookSnapshot();
         this.snapshotCache.put(symbol, snapshot);
 
+        // 2. 【关键修复】将活跃订单列表序列化到Redis，而不是整个OrderBook对象
         try {
-            String snapshotJson = objectMapper.writeValueAsString(orderBook);
+            List<OrderEntity> activeOrders = new ArrayList<>(orderBook.getOrderMap().values());
+            String snapshotJson = objectMapper.writeValueAsString(activeOrders);
             redisTemplate.opsForValue().set("orderbook:snapshot:" + symbol, snapshotJson);
         } catch (JsonProcessingException e) {
             log.error("序列化订单簿快照到Redis失败: symbol={}", symbol, e);
         }
 
+        // 3. 发布事件，用于WebSocket实时推送
         eventPublisher.publishEvent(new OrderBookUpdateEvent(this, symbol, snapshot));
     }
-
-    /**
-     * 在启动时，根据重建的OrderBook来重建快照缓存。
-     * @param symbol 交易对
-     * @param orderBook 重建的订单簿对象
-     */
+    
     public void rebuildCache(String symbol, OrderBook orderBook) {
         log.info("正在为 {} 重建快照缓存...", symbol);
         Map<String, List<OrderBookLevel>> snapshot = orderBook.getOrderBookSnapshot();

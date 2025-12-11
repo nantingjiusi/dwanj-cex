@@ -17,6 +17,7 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -33,7 +34,6 @@ public class OrderBookWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         log.info("WebSocket连接已建立 (匿名): {}", session.getId());
-        // 连接建立时是匿名的，等待客户端发送auth请求
     }
 
     @Override
@@ -57,22 +57,26 @@ public class OrderBookWebSocketHandler extends TextWebSocketHandler {
         }
 
         String op = request.getOp().toLowerCase();
-        String arg = request.getArgs().get(0);
-
-        switch (op) {
-            case "subscribe":
-                pushService.subscribe(arg, session);
-                sendInitialSnapshot(session, arg);
-                break;
-            case "unsubscribe":
-                // pushService.unsubscribe(arg, session); // 如果需要按主题取消
-                break;
-            case "auth":
-                handleAuth(session, arg);
-                break;
-            default:
-                log.warn("不支持的操作: {}", op);
-                session.sendMessage(new TextMessage("{\"error\": \"Unsupported operation\"}"));
+        for (String arg : request.getArgs()) {
+            switch (op) {
+                case "subscribe":
+                    pushService.subscribe(arg, session);
+                    if (arg.startsWith("orderbook:")) {
+                        sendInitialSnapshot(session, arg);
+                    } else if (arg.startsWith("ticker:")) {
+                        sendInitialTicker(session, arg);
+                    }
+                    break;
+                case "unsubscribe":
+                    // pushService.unsubscribe(arg, session); // 如果需要按主题取消
+                    break;
+                case "auth":
+                    handleAuth(session, arg);
+                    break;
+                default:
+                    log.warn("不支持的操作: {}", op);
+                    session.sendMessage(new TextMessage("{\"error\": \"Unsupported operation\"}"));
+            }
         }
     }
 
@@ -92,20 +96,25 @@ public class OrderBookWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void sendInitialSnapshot(WebSocketSession session, String topic) throws IOException {
-        String[] parts = topic.split(":");
-        if (parts.length != 2 || !"orderbook".equals(parts[0])) {
-            return;
-        }
-        String symbol = parts[1];
-
+        String symbol = topic.substring("orderbook:".length());
         Map<String, List<OrderBookLevel>> snapshot = matchingHandler.getOrderBookSnapshot(symbol);
-
         if (snapshot != null && !snapshot.isEmpty()) {
-            WebSocketPushMessage<?> pushMessage = new WebSocketPushMessage<>(topic, snapshot);
-            String payload = objectMapper.writeValueAsString(pushMessage);
-            session.sendMessage(new TextMessage(payload));
-            log.info("向 session {} 发送了 {} 的初始快照", session.getId(), symbol);
+            sendMessage(session, topic, snapshot);
         }
+    }
+
+    private void sendInitialTicker(WebSocketSession session, String topic) throws IOException {
+        String symbol = topic.substring("ticker:".length());
+        BigDecimal lastPrice = pushService.getLastPrice(symbol);
+        if (lastPrice.compareTo(BigDecimal.ZERO) > 0) {
+            log.info("向 session {} 发送了 {} 的初始价格: {}", session.getId(), symbol, lastPrice);
+            sendMessage(session, topic, lastPrice);
+        }
+    }
+
+    private void sendMessage(WebSocketSession session, String topic, Object data) throws IOException {
+        String payload = objectMapper.writeValueAsString(new WebSocketPushMessage<>(topic, data));
+        session.sendMessage(new TextMessage(payload));
     }
 
     @Override
