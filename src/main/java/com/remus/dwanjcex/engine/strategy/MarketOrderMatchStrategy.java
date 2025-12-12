@@ -24,6 +24,7 @@ public class MarketOrderMatchStrategy implements MatchStrategy {
 
     @Override
     public void match(OrderEntity order, OrderBook orderBook, DisruptorEvent event) {
+        // 市价单永远不会被加入订单簿，所以match方法不需要返回值
         if (order.getSide() == OrderTypes.Side.BUY) {
             matchMarketBuy(order, orderBook, event);
         } else {
@@ -48,7 +49,10 @@ public class MarketOrderMatchStrategy implements MatchStrategy {
 
             if (buyOrder.getUserId().equals(sellOrder.getUserId())) {
                 boolean shouldBreak = stpStrategyFactory.getActiveStrategy().handleSelfTrade(buyOrder, sellOrder, orderBook, null, event);
-                if (shouldBreak) break;
+                if (shouldBreak) {
+                    // 市价单遇到自成交，根据ExpireTaker策略，直接终止撮合
+                    break;
+                }
                 continue;
             }
 
@@ -79,7 +83,10 @@ public class MarketOrderMatchStrategy implements MatchStrategy {
 
             if (sellOrder.getUserId().equals(buyOrder.getUserId())) {
                 boolean shouldBreak = stpStrategyFactory.getActiveStrategy().handleSelfTrade(sellOrder, buyOrder, orderBook, null, event);
-                if (shouldBreak) break;
+                if (shouldBreak) {
+                    // 市价单遇到自成交，根据ExpireTaker策略，直接终止撮合
+                    break;
+                }
                 continue;
             }
 
@@ -92,17 +99,25 @@ public class MarketOrderMatchStrategy implements MatchStrategy {
     }
 
     private void processTrade(OrderEntity buyOrder, OrderEntity sellOrder, BigDecimal price, BigDecimal tradedQty, OrderBook orderBook, DisruptorEvent event) {
-
+        log.info(">>> 撮合成功: BuyOrder[{}] vs SellOrder[{}] | Price: {} | Qty: {}", 
+                buyOrder.getId(), sellOrder.getId(), price, tradedQty);
 
         BigDecimal cost = tradedQty.multiply(price);
         
         buyOrder.addFilled(tradedQty);
-        buyOrder.addQuoteFilled(cost);
+        // 市价买单需要累加成交额
+        if (buyOrder.getType() == OrderTypes.OrderType.MARKET && buyOrder.getSide() == OrderTypes.Side.BUY) {
+            buyOrder.addQuoteFilled(cost);
+        }
+        
         sellOrder.addFilled(tradedQty);
+        // 如果对手单是市价买单，也需要更新其成交额
+        if (sellOrder.getType() == OrderTypes.OrderType.MARKET && sellOrder.getSide() == OrderTypes.Side.BUY) {
+            sellOrder.addQuoteFilled(cost);
+        }
 
         event.addTradeEvent(createTradeEvent(buyOrder, sellOrder, price, tradedQty));
-        log.info(">>> 撮合成功: BuyOrder[{}] vs SellOrder[{}] | Price: {} | Qty: {}",
-                buyOrder.getId(), sellOrder.getId(), price, tradedQty);
+
         if (buyOrder.isFullyFilled()) {
             orderBook.remove(buyOrder.getId());
         }

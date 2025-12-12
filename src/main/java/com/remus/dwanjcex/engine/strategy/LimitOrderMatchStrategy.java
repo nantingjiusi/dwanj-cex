@@ -17,30 +17,32 @@ import java.util.Optional;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-
 public class LimitOrderMatchStrategy implements MatchStrategy {
 
     private final STPStrategyFactory stpStrategyFactory;
 
     @Override
     public void match(OrderEntity order, OrderBook orderBook, DisruptorEvent event) {
+        // 【关键修复】将撮合逻辑的返回值作为是否挂单的依据
+        boolean shouldAddToBook = true; 
         if (order.getSide() == OrderTypes.Side.BUY) {
-            matchBuyOrder(order, orderBook, event);
+            shouldAddToBook = matchBuyOrder(order, orderBook, event);
         } else {
-            matchSellOrder(order, orderBook, event);
+            shouldAddToBook = matchSellOrder(order, orderBook, event);
         }
 
-        if (!order.isFullyFilled()) {
+        // 只有当撮合逻辑允许，并且订单未完全成交时，才将其加入订单簿
+        if (shouldAddToBook && !order.isFullyFilled()) {
             orderBook.add(order);
         }
     }
 
-    private void matchBuyOrder(OrderEntity buyOrder, OrderBook orderBook, DisruptorEvent event) {
+    private boolean matchBuyOrder(OrderEntity buyOrder, OrderBook orderBook, DisruptorEvent event) {
         long buyPrice = OrderBook.toLong(buyOrder.getPrice());
         while (buyOrder.getRemaining().compareTo(BigDecimal.ZERO) > 0) {
             Optional<OrderBucket> bestAskBucketOpt = orderBook.getBestAskBucket();
             if (bestAskBucketOpt.isEmpty() || buyPrice < bestAskBucketOpt.get().getPrice()) {
-                break;
+                break; // 对手盘为空或价格不匹配，中断撮合，允许挂单
             }
 
             OrderBucket askBucket = bestAskBucketOpt.get();
@@ -52,20 +54,25 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
 
             if (buyOrder.getUserId().equals(sellOrder.getUserId())) {
                 boolean shouldBreak = stpStrategyFactory.getActiveStrategy().handleSelfTrade(buyOrder, sellOrder, orderBook, null, event);
-                if (shouldBreak) break;
+                if (shouldBreak) {
+                    // 如果STP策略要求中断（例如ExpireTaker），则不再将此Taker单挂入订单簿
+                    return false; 
+                }
                 continue;
             }
 
             processTrade(buyOrder, sellOrder, OrderBook.toBigDecimal(askBucket.getPrice()), orderBook, event);
         }
+        // 循环正常结束，意味着该订单可以被挂入订单簿
+        return true;
     }
 
-    private void matchSellOrder(OrderEntity sellOrder, OrderBook orderBook, DisruptorEvent event) {
+    private boolean matchSellOrder(OrderEntity sellOrder, OrderBook orderBook, DisruptorEvent event) {
         long sellPrice = OrderBook.toLong(sellOrder.getPrice());
         while (sellOrder.getRemaining().compareTo(BigDecimal.ZERO) > 0) {
             Optional<OrderBucket> bestBidBucketOpt = orderBook.getBestBidBucket();
             if (bestBidBucketOpt.isEmpty() || sellPrice > bestBidBucketOpt.get().getPrice()) {
-                break;
+                break; // 对手盘为空或价格不匹配，中断撮合，允许挂单
             }
 
             OrderBucket bidBucket = bestBidBucketOpt.get();
@@ -77,18 +84,22 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
 
             if (sellOrder.getUserId().equals(buyOrder.getUserId())) {
                 boolean shouldBreak = stpStrategyFactory.getActiveStrategy().handleSelfTrade(sellOrder, buyOrder, orderBook, null, event);
-                if (shouldBreak) break;
+                if (shouldBreak) {
+                    // 如果STP策略要求中断，则不再将此Taker单挂入订单簿
+                    return false;
+                }
                 continue;
             }
 
             processTrade(buyOrder, sellOrder, OrderBook.toBigDecimal(bidBucket.getPrice()), orderBook, event);
         }
+        // 循环正常结束，意味着该订单可以被挂入订单簿
+        return true;
     }
 
     private void processTrade(OrderEntity buyOrder, OrderEntity sellOrder, BigDecimal price, OrderBook orderBook, DisruptorEvent event) {
         BigDecimal tradedQty = buyOrder.getRemaining().min(sellOrder.getRemaining());
         
-        // 【新增】成交日志
         log.info(">>> 撮合成功: BuyOrder[{}] vs SellOrder[{}] | Price: {} | Qty: {}", 
                 buyOrder.getId(), sellOrder.getId(), price, tradedQty);
 
