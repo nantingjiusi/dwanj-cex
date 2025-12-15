@@ -207,8 +207,8 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
 
             if (isSelfTradeCancel) {
                 log.warn("通过DisruptorManager强制从内存中移除订单: {}", orderId);
-                // 【关键修复】调用正确的方法名 forceRemoveOrder
-                disruptorManager.getMatchingHandler(finalOrderState.getSymbol()).forceRemoveOrder(finalOrderState.getSymbol(), orderId);
+                // 【关键修复】调用正确的方法名 removeOrder
+                disruptorManager.getMatchingHandler(finalOrderState.getSymbol()).removeOrder(finalOrderState.getSymbol(), orderId);
             }
         }
     }
