@@ -1,8 +1,7 @@
 package com.remus.dwanjcex.wallet.controller;
 
 import com.remus.dwanjcex.config.jwt.UserContextHolder;
-import com.remus.dwanjcex.wallet.entity.UserBalance;
-
+import com.remus.dwanjcex.wallet.entity.WalletBalance;
 import com.remus.dwanjcex.wallet.entity.result.ResponseResult;
 import com.remus.dwanjcex.wallet.entity.result.ResultCode;
 import com.remus.dwanjcex.wallet.services.WalletService;
@@ -22,12 +21,12 @@ public class WalletController {
 
 
     @GetMapping("/balances")
-    public ResponseResult<List<UserBalance>> getAllBalances() {
+    public ResponseResult<List<WalletBalance>> getAllBalances() {
         Long currentUserId = UserContextHolder.getCurrentUserId();
         if (currentUserId == null) {
             return ResponseResult.error(ResultCode.UNAUTHORIZED);
         }
-        List<UserBalance> balances = walletService.getAllBalances(currentUserId);
+        List<WalletBalance> balances = walletService.getAllBalances(currentUserId);
         return ResponseResult.success(balances);
     }
 
