@@ -1,5 +1,6 @@
 package com.remus.dwanjcex.wallet.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -12,16 +13,14 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @Builder
 public class User {
-    private Long id;                // 用户ID，主键
-    private String username;        // 登录用户名
-    private String password;        // 哈希密码
-    private String email;           // 邮箱
-    private String phone;           // 手机号
-    private Integer status;         // 用户状态 0=禁用,1=启用
-    private LocalDateTime createdAt; // 创建时间
-    private LocalDateTime updatedAt; // 更新时间
+    private Long id;
+    private String username;
+    private String email;
 
-
-
-
+    @JsonIgnore // 【关键修复】在序列化时忽略此字段，防止密码哈希泄露
+    private String passwordHash;
+    
+    private Integer status;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
 }

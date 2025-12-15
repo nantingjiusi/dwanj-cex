@@ -3,10 +3,7 @@ package com.remus.dwanjcex;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.remus.dwanjcex.common.OrderTypes;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.*;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
@@ -23,7 +20,7 @@ public class MarketMakerBot {
     private static final RestTemplate restTemplate = new RestTemplate();
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
-    private static final int USER_COUNT = 10; // 【修改】减少并发用户数，降低压力
+    private static final int USER_COUNT = 20;
     private static final String SYMBOL = "BTCUSDT";
     private static final BigDecimal INITIAL_USDT = new BigDecimal("1000000");
     private static final BigDecimal INITIAL_BTC = new BigDecimal("100");
@@ -43,6 +40,13 @@ public class MarketMakerBot {
                 
                 // 登录获取Token
                 ResponseEntity<String> loginResponse = restTemplate.postForEntity(API_BASE_URL + "/auth/login", new UserCredentials(username, password), String.class);
+                
+                // 【关键调试】打印响应详情
+                if (loginResponse.getStatusCode() != HttpStatus.OK || loginResponse.getBody() == null) {
+                    System.err.println("登录失败! Status: " + loginResponse.getStatusCode() + ", Body: " + loginResponse.getBody());
+                    continue;
+                }
+
                 JsonNode loginNode = objectMapper.readTree(loginResponse.getBody());
                 String token = loginNode.get("data").get("token").asText();
 
@@ -54,6 +58,7 @@ public class MarketMakerBot {
                 System.out.println("Initialized bot: " + username);
             } catch (Exception e) {
                 System.err.println("Failed to initialize bot " + username + ": " + e.getMessage());
+                // e.printStackTrace(); // 打印堆栈以便排查
             }
         }
 
@@ -76,8 +81,7 @@ public class MarketMakerBot {
 
                         restTemplate.postForEntity(API_BASE_URL + "/api/order/place", request, String.class);
                         
-                        // 【修改】增加下单间隔，避免压垮后端
-                        Thread.sleep(random.nextInt(1500) + 500); // 500-1000ms 间隔
+                        Thread.sleep(random.nextInt(500) + 500); // 500-1000ms 间隔
                     } catch (Exception e) {
                         System.err.println("An error occurred while placing order for " + bot.username + ": " + e.getMessage());
                         try {

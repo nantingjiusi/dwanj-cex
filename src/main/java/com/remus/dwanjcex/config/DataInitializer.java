@@ -6,34 +6,30 @@ import com.remus.dwanjcex.wallet.services.AssetService;
 import com.remus.dwanjcex.wallet.services.SymbolService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.ApplicationArguments;
-import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.CommandLineRunner;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 
 @Slf4j
 @Component
-@Order(1) // 【新增】确保尽早执行
+@Order(1)
 @RequiredArgsConstructor
-public class DataInitializer  implements ApplicationRunner {
+public class DataInitializer implements CommandLineRunner {
 
     private final AssetService assetService;
     private final SymbolService symbolService;
 
     @Override
-    public void run(ApplicationArguments args) throws Exception {
-        // 【新增】醒目的日志，确认是否被调用
-
+    public void run(String... args) throws Exception {
         log.info("Initializing default data...");
 
         // 1. 初始化资产
-        createAssetIfNotExists("BTC", "Bitcoin", 8, true);
-        createAssetIfNotExists("USDT", "TetherUS", 6, true);
-        createAssetIfNotExists("ETH", "Ethereum", 8, true);
-        createAssetIfNotExists("ZEU", "Zeus Coin", 6, true);
+        createAssetIfNotExists("BTC", "Bitcoin", 8, "0.00001", "100");
+        createAssetIfNotExists("USDT", "TetherUS", 6, "0.01", "1000000");
+        createAssetIfNotExists("ETH", "Ethereum", 8, "0.0001", "1000");
+        createAssetIfNotExists("ZEU", "Zeus Coin", 6, "1", "1000000");
 
         // 2. 初始化交易对
         createSymbolIfNotExists("BTCUSDT", "BTC", "USDT", 8, 2);
@@ -43,15 +39,18 @@ public class DataInitializer  implements ApplicationRunner {
         log.info("Default data initialized.");
     }
 
-    private void createAssetIfNotExists(String symbol, String name, int scale, boolean isEnabled) {
+    private void createAssetIfNotExists(String symbol, String displayName, int precision, String minSize, String maxSize) {
         if (assetService.getAsset(symbol) == null) {
             Asset asset = Asset.builder()
                     .symbol(symbol)
-                    .name(name)
-                    .scale(scale)
-                    .isEnabled(isEnabled)
-                    .createdAt(LocalDateTime.now())
-                    .updatedAt(LocalDateTime.now())
+                    .displayName(displayName)
+                    .precisionDigits(precision)
+                    .minSize(new BigDecimal(minSize))
+                    .maxSize(new BigDecimal(maxSize))
+                    .isTradable(true)
+                    .isDepositEnabled(true)
+                    .isWithdrawEnabled(true)
+                    .isEnabled(true)
                     .build();
             assetService.createAsset(asset);
             log.info("Created asset: {}", symbol);
@@ -72,5 +71,4 @@ public class DataInitializer  implements ApplicationRunner {
             log.info("Created symbol: {}", symbol);
         }
     }
-
 }

@@ -12,16 +12,15 @@ import java.time.LocalDateTime;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class Asset {
+public class AssetChain {
     private Long id;
-    private String symbol;
-    private String displayName;
-    private Integer precisionDigits;
-    private BigDecimal minSize;
-    private BigDecimal maxSize;
-    private Boolean isTradable;
-    private Boolean isDepositEnabled;
-    private Boolean isWithdrawEnabled;
+    private String assetSymbol;
+    private String chain;
+    private String contractAddress;
+    private BigDecimal minDeposit;
+    private BigDecimal minWithdraw;
+    private BigDecimal withdrawFee;
+    private Integer confirmations;
     private Boolean isEnabled;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
