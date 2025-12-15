@@ -36,10 +36,7 @@ public class WebSocketPushService {
         this.lastPrices.put(symbol, price);
     }
 
-    /**
-     * 【关键修复】恢复定时任务，作为唯一的推送者
-     */
-    @Scheduled(fixedRate = 200) // 使用200ms以获得更平滑的体验
+    @Scheduled(fixedRate = 200)
     public void pushTickerUpdates() {
         if (lastPrices.isEmpty()) {
             return;
@@ -87,6 +84,21 @@ public class WebSocketPushService {
         log.info("Session {} 已注册为用户 {}", session.getId(), userId);
     }
 
+    /**
+     * 【新增】取消对特定主题的订阅
+     */
+    public void unsubscribeTopic(String topic, WebSocketSession session) {
+        Set<WebSocketSession> subscribers = subscriptions.get(topic);
+        if (subscribers != null) {
+            if (subscribers.remove(session)) {
+                log.info("Session {} 取消订阅了公共主题: {}", session.getId(), topic);
+            }
+        }
+    }
+
+    /**
+     * 当连接关闭时，取消该session的所有订阅
+     */
     public void unsubscribe(WebSocketSession session) {
         subscriptions.forEach((topic, subscribers) -> {
             if (subscribers.remove(session)) {

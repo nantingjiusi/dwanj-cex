@@ -14,6 +14,7 @@ import com.remus.dwanjcex.wallet.entity.dto.OrderDto;
 import com.remus.dwanjcex.websocket.event.OrderForceRemovedEvent;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Scope;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -25,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Component
+@Scope("prototype")
 public class MatchingHandler implements EventHandler<DisruptorEvent> {
 
     @Getter
@@ -62,20 +64,19 @@ public class MatchingHandler implements EventHandler<DisruptorEvent> {
     }
 
     /**
-     * 【新增】监听强制移除事件，清理内存状态
+     * 【新增】公共方法：强制从内存订单簿中移除订单
      */
-    @EventListener
-    public void handleForceRemoveOrder(OrderForceRemovedEvent event) {
-        log.warn("收到 OrderForceRemovedEvent，强制从内存订单簿中移除订单: {}", event.getOrderId());
-        OrderBook orderBook = books.get(event.getSymbol());
+    public void forceRemoveOrder(String symbol, Long orderId) {
+        log.warn("收到强制移除指令，从内存订单簿中移除订单: {}", orderId);
+        OrderBook orderBook = books.get(symbol);
         if (orderBook != null) {
-            boolean removed = orderBook.remove(event.getOrderId());
+            boolean removed = orderBook.remove(orderId);
             if (removed) {
-                log.info("成功从内存中移除僵尸订单: {}", event.getOrderId());
+                log.info("成功从内存中移除僵尸订单: {}", orderId);
                 // 移除后，也更新一次快照和推送
-                updateSnapshotAndPublish(event.getSymbol(), orderBook);
+                updateSnapshotAndPublish(symbol, orderBook);
             } else {
-                log.warn("尝试移除僵尸订单 {} 失败，可能已被移除。", event.getOrderId());
+                log.warn("尝试移除僵尸订单 {} 失败，可能已被移除。", orderId);
             }
         }
     }

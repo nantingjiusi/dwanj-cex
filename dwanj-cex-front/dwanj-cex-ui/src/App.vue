@@ -2,7 +2,6 @@
   <div id="app">
     <h1>CEX Trading Terminal</h1>
     
-    <!-- 【新增】交易对选择器 -->
     <div class="symbol-selector">
       <span>Trading Pair:</span>
       <select v-model="currentSymbol" @change="switchSymbol">
@@ -40,7 +39,7 @@ import PlaceOrderForm from './components/PlaceOrderForm.vue';
 import Balances from './components/Balances.vue';
 import MyOrders from './components/MyOrders.vue';
 import Ticker from './components/Ticker.vue';
-import { connectWebSocket, disconnectWebSocket, tickerState } from './services/WebSocketService';
+import { connectWebSocket, disconnectWebSocket, tickerState, orderBookState } from './services/WebSocketService';
 
 export default {
   name: 'App',
@@ -58,10 +57,13 @@ export default {
 
     const switchSymbol = () => {
       console.log(`Switching to symbol: ${currentSymbol.value}`);
-      disconnectWebSocket();
-      // 重置状态，避免显示旧数据
+      
+      // 【关键修复】重置状态并直接调用connectWebSocket进行热切换
       tickerState.price = 0;
       tickerState.lastPrice = 0;
+      orderBookState.bids = [];
+      orderBookState.asks = [];
+      
       connectWebSocket(currentSymbol.value);
     };
 
@@ -112,7 +114,7 @@ export default {
       balancesComponent,
       myOrdersComponent,
       tickerState,
-      switchSymbol, // 暴露给模板
+      switchSymbol,
       onLoginSuccess,
       onLogout,
       onOrderPlaced,

@@ -28,7 +28,7 @@ import java.util.Map;
 public class OrderBookWebSocketHandler extends TextWebSocketHandler {
 
     private final WebSocketPushService pushService;
-    private final StringRedisTemplate redisTemplate; // 注入RedisTemplate
+    private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final JwtUtils jwtUtils;
 
@@ -40,7 +40,7 @@ public class OrderBookWebSocketHandler extends TextWebSocketHandler {
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
         String payload = message.getPayload();
-        log.info("收到WebSocket消息: {} from session: {}", payload, session.getId());
+        // log.info("收到WebSocket消息: {} from session: {}", payload, session.getId());
 
         try {
             WebSocketRequest request = objectMapper.readValue(payload, WebSocketRequest.class);
@@ -69,7 +69,7 @@ public class OrderBookWebSocketHandler extends TextWebSocketHandler {
                     }
                     break;
                 case "unsubscribe":
-                    // pushService.unsubscribe(arg, session); // 如果需要按主题取消
+                    pushService.unsubscribeTopic(arg, session); // 【新增】处理取消订阅
                     break;
                 case "auth":
                     handleAuth(session, arg);
@@ -98,22 +98,29 @@ public class OrderBookWebSocketHandler extends TextWebSocketHandler {
 
     private void sendInitialSnapshot(WebSocketSession session, String topic) throws IOException {
         String symbol = topic.substring("orderbook:".length());
-        // 【修改】从Redis读取订单簿快照的JSON字符串
-        String snapshotJson = redisTemplate.opsForValue().get("orderbook_display_snapshot:" + symbol);
+        String redisKey = "orderbook_display_snapshot:" + symbol;
+        String snapshotJson = redisTemplate.opsForValue().get(redisKey);
+        
         if (snapshotJson != null) {
+            log.info("从Redis获取到 {} 的初始订单簿快照，准备发送给 session {}", symbol, session.getId());
             Map<String, List<OrderBookLevel>> snapshot = objectMapper.readValue(snapshotJson, new TypeReference<>() {});
             sendMessage(session, topic, snapshot);
+        } else {
+            log.warn("Redis中不存在 {} 的订单簿快照 (Key: {})，无法发送初始数据。", symbol, redisKey);
         }
     }
 
     private void sendInitialTicker(WebSocketSession session, String topic) throws IOException {
         String symbol = topic.substring("ticker:".length());
-        // 【修改】从Redis读取最新价格
-        String priceStr = redisTemplate.opsForValue().get("last_price:" + symbol);
+        String redisKey = "last_price:" + symbol;
+        String priceStr = redisTemplate.opsForValue().get(redisKey);
+        
         if (priceStr != null) {
             BigDecimal lastPrice = new BigDecimal(priceStr);
-            log.info("向 session {} 发送了 {} 的初始价格: {}", session.getId(), symbol, lastPrice);
+            log.info("从Redis获取到 {} 的初始价格: {}，准备发送给 session {}", symbol, lastPrice, session.getId());
             sendMessage(session, topic, lastPrice);
+        } else {
+            log.warn("Redis中不存在 {} 的最新价格 (Key: {})，无法发送初始数据。", symbol, redisKey);
         }
     }
 

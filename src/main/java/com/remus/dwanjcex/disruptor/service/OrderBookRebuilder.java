@@ -26,7 +26,7 @@ public class OrderBookRebuilder implements ApplicationRunner {
     private final TradeMapper tradeMapper;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
-    private final MatchingHandler matchingHandler;
+    private final DisruptorManager disruptorManager;
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
@@ -51,9 +51,12 @@ public class OrderBookRebuilder implements ApplicationRunner {
                         for (OrderEntity order : activeOrders) {
                             rebuiltOrderBook.add(order);
                         }
-                        matchingHandler.getBooks().put(symbol, rebuiltOrderBook);
-                        // 【修改】调用rebuildCache来预热内存和Redis缓存
-                        matchingHandler.rebuildCache(symbol, rebuiltOrderBook);
+                        
+                        // 通过Manager获取该symbol专属的MatchingHandler
+                        MatchingHandler targetHandler = disruptorManager.getMatchingHandler(symbol);
+                        targetHandler.getBooks().put(symbol, rebuiltOrderBook);
+                        targetHandler.rebuildCache(symbol, rebuiltOrderBook);
+                        
                         log.info("成功从Redis快照重建订单簿: {}, 包含 {} 个活跃订单。", symbol, activeOrders.size());
                     }
                 } else {
@@ -63,14 +66,12 @@ public class OrderBookRebuilder implements ApplicationRunner {
                 log.error("从Redis快照重建订单簿失败: symbol={}", symbol, e);
             }
 
-            // 2. 【修改】恢复并预热最新成交价
+            // 2. 恢复并预热最新成交价
             try {
                 Trade lastTrade = tradeMapper.findLastTradeBySymbol(symbol);
                 if (lastTrade != null) {
                     String priceStr = lastTrade.getPrice().toPlainString();
-                    // 直接写入Redis缓存
                     redisTemplate.opsForValue().set("last_price:" + symbol, priceStr);
-                    // 直接发布到Redis频道
                     String payload = objectMapper.writeValueAsString(lastTrade);
                     redisTemplate.convertAndSend("channel:ticker:" + symbol, payload);
                     log.info("成功恢复并预热 {} 的最新成交价: {}", symbol, priceStr);
