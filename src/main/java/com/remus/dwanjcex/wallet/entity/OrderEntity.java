@@ -2,6 +2,8 @@ package com.remus.dwanjcex.wallet.entity;
 
 import com.remus.dwanjcex.common.OrderStatus;
 import com.remus.dwanjcex.common.OrderTypes;
+import com.remus.dwanjcex.wallet.entity.state.NewOrderState;
+import com.remus.dwanjcex.wallet.entity.state.OrderState;
 import lombok.*;
 
 import java.math.BigDecimal;
@@ -30,9 +32,6 @@ public class OrderEntity {
     @Builder.Default
     private BigDecimal filled = BigDecimal.ZERO;
     
-    // 【修复】这个字段应该在addFilled中计算，而不是直接持久化
-    // private BigDecimal remaining; 
-    
     private OrderStatus status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -44,9 +43,24 @@ public class OrderEntity {
     @Builder.Default
     private BigDecimal quoteFilled = BigDecimal.ZERO;
 
-    /**
-     * 【关键修复】提供一个动态计算的getRemaining方法
-     */
+    // 状态模式核心
+    private transient OrderState state;
+
+    public void init() {
+        this.state = NewOrderState.INSTANCE;
+        this.status = this.state.getStatus();
+    }
+
+    public void fill(BigDecimal filledQty, BigDecimal filledAmount) {
+        this.state = this.state.onFill(this, filledQty, filledAmount);
+        this.status = this.state.getStatus();
+    }
+
+    public void cancel() {
+        this.state = this.state.onCancel(this);
+        this.status = this.state.getStatus();
+    }
+
     public BigDecimal getRemaining() {
         if (this.quantity == null) return BigDecimal.ZERO;
         if (this.filled == null) return this.quantity;

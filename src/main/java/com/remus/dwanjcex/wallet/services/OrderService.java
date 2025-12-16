@@ -1,7 +1,6 @@
 package com.remus.dwanjcex.wallet.services;
 
 import com.remus.dwanjcex.common.KeyConstant;
-import com.remus.dwanjcex.common.OrderStatus;
 import com.remus.dwanjcex.common.OrderTypes;
 import com.remus.dwanjcex.disruptor.event.OrderCancelEvent;
 import com.remus.dwanjcex.disruptor.event.OrderCreatedEvent;
@@ -46,8 +45,7 @@ public class OrderService {
                 .userId(dto.getUserId())
                 .marketSymbol(dto.getSymbol())
                 .type(dto.getType())
-                .side(dto.getSide())
-                .status(OrderStatus.NEW);
+                .side(dto.getSide());
 
         if (dto.getType() == OrderTypes.OrderType.LIMIT) {
             builder.price(dto.getPrice()).quantity(dto.getAmount());
@@ -61,6 +59,7 @@ public class OrderService {
         }
 
         OrderEntity order = builder.build();
+        order.init(); // 【关键修改】初始化状态
         orderMapper.insert(order);
 
         freezeFunds(order, market);
@@ -95,9 +94,9 @@ public class OrderService {
         if (!Objects.equals(order.getUserId(), userId)) {
             throw new BusinessException(ResultCode.ORDER_NOT_BELONG_TO_USER);
         }
-        if (order.getStatus() != OrderStatus.NEW && order.getStatus() != OrderStatus.PARTIAL) {
-            throw new BusinessException(ResultCode.ORDER_CANNOT_BE_CANCELED);
-        }
+        
+        // 状态模式下，不再需要在这里检查状态
+        // if (order.getStatus() != OrderStatus.NEW && order.getStatus() != OrderStatus.PARTIAL) { ... }
 
         CancelOrderDto cancelDto = new CancelOrderDto(orderId, userId, order.getMarketSymbol(), order.getSide());
         eventPublisher.publishEvent(new OrderCancelEvent(this, cancelDto));
