@@ -11,11 +11,9 @@ import com.remus.dwanjcex.wallet.entity.OrderEntity;
 import com.remus.dwanjcex.wallet.entity.dto.CancelOrderDto;
 import com.remus.dwanjcex.wallet.entity.dto.OrderBookLevel;
 import com.remus.dwanjcex.wallet.entity.dto.OrderDto;
-import com.remus.dwanjcex.websocket.event.OrderForceRemovedEvent;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Scope;
-import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 

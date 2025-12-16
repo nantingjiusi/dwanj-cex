@@ -6,7 +6,7 @@ import com.remus.dwanjcex.disruptor.handler.MatchingHandler;
 import com.remus.dwanjcex.engine.OrderBook;
 import com.remus.dwanjcex.wallet.entity.OrderEntity;
 import com.remus.dwanjcex.wallet.entity.Trade;
-import com.remus.dwanjcex.wallet.mapper.OrderMapper;
+import com.remus.dwanjcex.wallet.mapper.MarketMapper;
 import com.remus.dwanjcex.wallet.mapper.TradeMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,7 +22,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class OrderBookRebuilder implements ApplicationRunner {
 
-    private final OrderMapper orderMapper;
+    private final MarketMapper marketMapper;
     private final TradeMapper tradeMapper;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -32,7 +32,7 @@ public class OrderBookRebuilder implements ApplicationRunner {
     public void run(ApplicationArguments args) throws Exception {
         log.info("开始从Redis快照重建订单簿和最新价格...");
 
-        List<String> symbols = orderMapper.findAllSymbols();
+        List<String> symbols = marketMapper.findAllSymbols();
         if (symbols.isEmpty()) {
             log.info("没有找到任何交易对，无需重建。");
             return;
@@ -52,7 +52,6 @@ public class OrderBookRebuilder implements ApplicationRunner {
                             rebuiltOrderBook.add(order);
                         }
                         
-                        // 通过Manager获取该symbol专属的MatchingHandler
                         MatchingHandler targetHandler = disruptorManager.getMatchingHandler(symbol);
                         targetHandler.getBooks().put(symbol, rebuiltOrderBook);
                         targetHandler.rebuildCache(symbol, rebuiltOrderBook);

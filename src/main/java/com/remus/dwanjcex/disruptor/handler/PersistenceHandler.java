@@ -7,13 +7,13 @@ import com.remus.dwanjcex.common.OrderTypes;
 import com.remus.dwanjcex.disruptor.event.DisruptorEvent;
 import com.remus.dwanjcex.disruptor.event.TradeEvent;
 import com.remus.dwanjcex.disruptor.service.DisruptorManager;
+import com.remus.dwanjcex.wallet.entity.Market;
 import com.remus.dwanjcex.wallet.entity.OrderEntity;
-import com.remus.dwanjcex.wallet.entity.SymbolEntity;
 import com.remus.dwanjcex.wallet.entity.Trade;
 import com.remus.dwanjcex.wallet.entity.dto.CancelOrderDto;
 import com.remus.dwanjcex.wallet.mapper.OrderMapper;
 import com.remus.dwanjcex.wallet.mapper.TradeMapper;
-import com.remus.dwanjcex.wallet.services.SymbolService;
+import com.remus.dwanjcex.wallet.services.MarketService;
 import com.remus.dwanjcex.wallet.services.WalletService;
 import com.remus.dwanjcex.websocket.event.OrderCancelNotificationEvent;
 import lombok.extern.slf4j.Slf4j;
@@ -41,7 +41,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     private final WalletService walletService;
     private final OrderMapper orderMapper;
     private final TradeMapper tradeMapper;
-    private final SymbolService symbolService;
+    private final MarketService marketService;
     private final ApplicationEventPublisher eventPublisher;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -52,12 +52,15 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     private final Map<Long, OrderEntity> pendingOrderUpdates = new HashMap<>();
     private final List<Trade> pendingRedisPushes = new ArrayList<>();
     private static final int BATCH_SIZE = 100;
+    
+    private long lastFlushTime = System.currentTimeMillis();
+    private static final long FLUSH_INTERVAL_MS = 200;
 
-    public PersistenceHandler(WalletService walletService, OrderMapper orderMapper, TradeMapper tradeMapper, SymbolService symbolService, ApplicationEventPublisher eventPublisher, StringRedisTemplate redisTemplate, ObjectMapper objectMapper, DisruptorManager disruptorManager, PlatformTransactionManager transactionManager) {
+    public PersistenceHandler(WalletService walletService, OrderMapper orderMapper, TradeMapper tradeMapper, MarketService marketService, ApplicationEventPublisher eventPublisher, StringRedisTemplate redisTemplate, ObjectMapper objectMapper, DisruptorManager disruptorManager, PlatformTransactionManager transactionManager) {
         this.walletService = walletService;
         this.orderMapper = orderMapper;
         this.tradeMapper = tradeMapper;
-        this.symbolService = symbolService;
+        this.marketService = marketService;
         this.eventPublisher = eventPublisher;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
@@ -77,25 +80,25 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
                     break;
             }
 
-            if (endOfBatch || pendingTrades.size() >= BATCH_SIZE || pendingOrderUpdates.size() >= BATCH_SIZE) {
+            long now = System.currentTimeMillis();
+            boolean timeToFlush = (now - lastFlushTime) >= FLUSH_INTERVAL_MS;
+            boolean bufferFull = pendingTrades.size() >= BATCH_SIZE || pendingOrderUpdates.size() >= BATCH_SIZE;
+            boolean hasDataToFlush = !pendingTrades.isEmpty() || !pendingOrderUpdates.isEmpty();
+
+            if ((endOfBatch || timeToFlush || bufferFull) && hasDataToFlush) {
                 flush();
+                lastFlushTime = now;
             }
         } catch (Exception e) {
             log.error("PersistenceHandler 处理事件失败: event={}", event, e);
-            pendingTrades.clear();
-            pendingOrderUpdates.clear();
-            pendingRedisPushes.clear();
+            clearBuffers();
         }
     }
 
     private void handlePlaceOrderPersistence(DisruptorEvent event) {
         if (event.getCancelledOrderIds() != null && !event.getCancelledOrderIds().isEmpty()) {
             for (Long cancelledOrderId : event.getCancelledOrderIds()) {
-                try {
-                    processCancelOrder(cancelledOrderId, "Cancelled by self-trade");
-                } catch (Exception e) {
-                    log.error("处理自成交取消挂单失败: orderId={}", cancelledOrderId, e);
-                }
+                processCancelOrder(cancelledOrderId, "Cancelled by self-trade");
             }
         }
 
@@ -103,58 +106,39 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         if (trades != null && !trades.isEmpty()) {
             BigDecimal totalTradedQty = BigDecimal.ZERO;
             BigDecimal totalTradedCost = BigDecimal.ZERO;
-
             for (TradeEvent trade : trades) {
-                try {
-                    Trade tradeEntity = processSingleTrade(trade);
-                    if (tradeEntity != null) {
-                        pendingRedisPushes.add(tradeEntity);
-                    }
-                    SymbolEntity symbol = symbolService.getSymbol(trade.getSymbol());
-                    if (symbol != null) {
-                        BigDecimal tradedCost = trade.getPrice().multiply(trade.getQuantity()).setScale(symbol.getQuoteScale(), RoundingMode.DOWN);
-                        totalTradedQty = totalTradedQty.add(trade.getQuantity());
-                        totalTradedCost = totalTradedCost.add(tradedCost);
-                    }
-                } catch (Exception e) {
-                    log.error("处理成交事件失败: trade={}", trade, e);
+                Trade tradeEntity = processSingleTrade(trade);
+                if (tradeEntity != null) {
+                    pendingRedisPushes.add(tradeEntity);
+                }
+                Market market = marketService.getMarket(trade.getSymbol());
+                if (market != null) {
+                    BigDecimal tradedCost = trade.getPrice().multiply(trade.getQuantity()).setScale(market.getPricePrecision(), RoundingMode.DOWN);
+                    totalTradedQty = totalTradedQty.add(trade.getQuantity());
+                    totalTradedCost = totalTradedCost.add(tradedCost);
                 }
             }
-
-            try {
-                updateMarketOrderAvgPrice(event.getOrderId(), totalTradedQty, totalTradedCost);
-            } catch (Exception e) {
-                log.error("更新市价单均价失败: orderId={}", event.getOrderId(), e);
-            }
+            updateMarketOrderAvgPrice(event.getOrderId(), totalTradedQty, totalTradedCost);
         }
-
-        try {
-            processFinalOrderState(event.getOrderId(), event.isSelfTradeCancel());
-        } catch (Exception e) {
-            log.error("处理订单最终状态失败: orderId={}", event.getOrderId(), e);
-        }
+        processFinalOrderState(event.getOrderId(), event.isSelfTradeCancel());
     }
 
     private void handleCancelOrderPersistence(DisruptorEvent event) {
         CancelOrderDto dto = event.getCancelOrder();
-        try {
-            processCancelOrder(dto.getOrderId(), "Cancelled by user");
-        } catch (Exception e) {
-            log.error("处理用户取消订单失败: orderId={}", dto.getOrderId(), e);
-        }
+        processCancelOrder(dto.getOrderId(), "Cancelled by user");
     }
 
     public Trade processSingleTrade(TradeEvent trade) {
-        SymbolEntity symbol = symbolService.getSymbol(trade.getSymbol());
-        if (symbol == null) return null;
+        Market market = marketService.getMarket(trade.getSymbol());
+        if (market == null) return null;
 
-        BigDecimal tradedCost = trade.getPrice().multiply(trade.getQuantity()).setScale(symbol.getQuoteScale(), RoundingMode.DOWN);
+        BigDecimal tradedCost = trade.getPrice().multiply(trade.getQuantity()).setScale(market.getPricePrecision(), RoundingMode.DOWN);
         String reason = "trade:" + trade.getBuyOrderId() + "/" + trade.getSellOrderId();
 
-        walletService.reduceFrozen(trade.getBuyerUserId(), symbol.getQuoteCoin(), tradedCost, reason);
-        walletService.reduceFrozen(trade.getSellerUserId(), symbol.getBaseCoin(), trade.getQuantity(), reason);
-        walletService.settleCredit(trade.getBuyerUserId(), symbol.getBaseCoin(), trade.getQuantity(), reason);
-        walletService.settleCredit(trade.getSellerUserId(), symbol.getQuoteCoin(), tradedCost, reason);
+        walletService.reduceFrozen(trade.getBuyerUserId(), market.getQuoteAsset(), tradedCost, reason);
+        walletService.reduceFrozen(trade.getSellerUserId(), market.getBaseAsset(), trade.getQuantity(), reason);
+        walletService.settleCredit(trade.getBuyerUserId(), market.getBaseAsset(), trade.getQuantity(), reason);
+        walletService.settleCredit(trade.getSellerUserId(), market.getQuoteAsset(), tradedCost, reason);
 
         Trade tradeEntity = Trade.builder()
                 .buyOrderId(trade.getBuyOrderId()).sellOrderId(trade.getSellOrderId())
@@ -180,9 +164,12 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     public void updateMarketOrderAvgPrice(Long orderId, BigDecimal totalTradedQty, BigDecimal totalTradedCost) {
         OrderEntity incomingOrder = getOrderFromCacheOrDb(orderId);
         if (incomingOrder != null && incomingOrder.getType() == OrderTypes.OrderType.MARKET && totalTradedQty.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal avgPrice = totalTradedCost.divide(totalTradedQty, symbolService.getSymbol(incomingOrder.getSymbol()).getQuoteScale(), RoundingMode.HALF_UP);
-            incomingOrder.setPrice(avgPrice);
-            pendingOrderUpdates.put(incomingOrder.getId(), incomingOrder);
+            Market market = marketService.getMarket(incomingOrder.getSymbol());
+            if (market != null) {
+                BigDecimal avgPrice = totalTradedCost.divide(totalTradedQty, market.getPricePrecision(), RoundingMode.HALF_UP);
+                incomingOrder.setPrice(avgPrice);
+                pendingOrderUpdates.put(incomingOrder.getId(), incomingOrder);
+            }
         }
     }
 
@@ -207,7 +194,6 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
 
             if (isSelfTradeCancel) {
                 log.warn("通过DisruptorManager强制从内存中移除订单: {}", orderId);
-                // 【关键修复】调用正确的方法名 removeOrder
                 disruptorManager.getMatchingHandler(finalOrderState.getSymbol()).removeOrder(finalOrderState.getSymbol(), orderId);
             }
         }
@@ -217,24 +203,24 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         if (order.getStatus() == OrderStatus.CANCELED || order.getStatus() == OrderStatus.FILLED || order.getStatus() == OrderStatus.PARTIALLY_FILLED_AND_CLOSED) {
             return;
         }
-        SymbolEntity symbol = symbolService.getSymbol(order.getSymbol());
-        if (symbol == null) return;
+        Market market = marketService.getMarket(order.getSymbol());
+        if (market == null) return;
 
         if (order.getSide() == OrderTypes.Side.BUY) {
             BigDecimal amountToUnfreeze;
             if (order.getType() == OrderTypes.OrderType.LIMIT) {
                 BigDecimal remainingQty = order.getAmount().subtract(order.getFilled());
-                amountToUnfreeze = order.getPrice().multiply(remainingQty).setScale(symbol.getQuoteScale(), RoundingMode.HALF_UP);
+                amountToUnfreeze = order.getPrice().multiply(remainingQty).setScale(market.getPricePrecision(), RoundingMode.HALF_UP);
             } else {
                 amountToUnfreeze = order.getQuoteAmount().subtract(order.getQuoteFilled());
             }
             if (amountToUnfreeze.compareTo(BigDecimal.ZERO) > 0) {
-                walletService.unfreeze(order.getUserId(), symbol.getQuoteCoin(), amountToUnfreeze, reason + ":" + order.getId());
+                walletService.unfreeze(order.getUserId(), market.getQuoteAsset(), amountToUnfreeze, reason + ":" + order.getId());
             }
         } else {
             BigDecimal remainingQty = order.getAmount().subtract(order.getFilled());
             if (remainingQty.compareTo(BigDecimal.ZERO) > 0) {
-                walletService.unfreeze(order.getUserId(), symbol.getBaseCoin(), remainingQty, reason + ":" + order.getId());
+                walletService.unfreeze(order.getUserId(), market.getBaseAsset(), remainingQty, reason + ":" + order.getId());
             }
         }
         eventPublisher.publishEvent(new OrderCancelNotificationEvent(this, order.getUserId(), order.getId(), reason));
@@ -287,17 +273,21 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
                     }
                 }
             });
-            
-            pendingTrades.clear();
-            pendingOrderUpdates.clear();
         }
         
         if (!pendingRedisPushes.isEmpty()) {
             for (Trade trade : pendingRedisPushes) {
                 publishToRedis(trade);
             }
-            pendingRedisPushes.clear();
         }
+        
+        clearBuffers();
+    }
+    
+    private void clearBuffers() {
+        pendingTrades.clear();
+        pendingOrderUpdates.clear();
+        pendingRedisPushes.clear();
     }
 
     private void publishToRedis(Trade tradeEntity) {

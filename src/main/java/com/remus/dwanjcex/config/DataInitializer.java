@@ -1,9 +1,9 @@
 package com.remus.dwanjcex.config;
 
 import com.remus.dwanjcex.wallet.entity.Asset;
-import com.remus.dwanjcex.wallet.entity.SymbolEntity;
+import com.remus.dwanjcex.wallet.entity.Market;
 import com.remus.dwanjcex.wallet.services.AssetService;
-import com.remus.dwanjcex.wallet.services.SymbolService;
+import com.remus.dwanjcex.wallet.services.MarketService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
@@ -19,7 +19,7 @@ import java.math.BigDecimal;
 public class DataInitializer implements CommandLineRunner {
 
     private final AssetService assetService;
-    private final SymbolService symbolService;
+    private final MarketService marketService;
 
     @Override
     public void run(String... args) throws Exception {
@@ -32,9 +32,9 @@ public class DataInitializer implements CommandLineRunner {
         createAssetIfNotExists("ZEU", "Zeus Coin", 6, "1", "1000000");
 
         // 2. 初始化交易对
-        createSymbolIfNotExists("BTCUSDT", "BTC", "USDT", 8, 2);
-        createSymbolIfNotExists("ETHUSDT", "ETH", "USDT", 8, 2);
-        createSymbolIfNotExists("ZEUUSDT", "ZEU", "USDT", 6, 4);
+        createMarketIfNotExists("BTCUSDT", "BTC", "USDT", 2, 8, "0.00001", "10");
+        createMarketIfNotExists("ETHUSDT", "ETH", "USDT", 2, 8, "0.0001", "10");
+        createMarketIfNotExists("ZEUUSDT", "ZEU", "USDT", 4, 6, "1", "10");
 
         log.info("Default data initialized.");
     }
@@ -57,18 +57,20 @@ public class DataInitializer implements CommandLineRunner {
         }
     }
 
-    private void createSymbolIfNotExists(String symbol, String baseCoin, String quoteCoin, int baseScale, int quoteScale) {
-        if (symbolService.getSymbol(symbol) == null) {
-            SymbolEntity symbolEntity = SymbolEntity.builder()
+    private void createMarketIfNotExists(String symbol, String baseAsset, String quoteAsset, int pricePrecision, int quantityPrecision, String minOrderSize, String minOrderValue) {
+        if (marketService.getMarket(symbol) == null) {
+            Market market = Market.builder()
                     .symbol(symbol)
-                    .baseCoin(baseCoin)
-                    .quoteCoin(quoteCoin)
-                    .baseScale(baseScale)
-                    .quoteScale(quoteScale)
-                    .minOrderValue(new BigDecimal("10"))
+                    .baseAsset(baseAsset)
+                    .quoteAsset(quoteAsset)
+                    .pricePrecision(pricePrecision)
+                    .quantityPrecision(quantityPrecision)
+                    .minOrderSize(new BigDecimal(minOrderSize))
+                    .minOrderValue(new BigDecimal(minOrderValue))
+                    .isEnabled(true)
                     .build();
-            symbolService.createSymbol(symbolEntity);
-            log.info("Created symbol: {}", symbol);
+            marketService.createMarket(market);
+            log.info("Created market: {}", symbol);
         }
     }
 }
