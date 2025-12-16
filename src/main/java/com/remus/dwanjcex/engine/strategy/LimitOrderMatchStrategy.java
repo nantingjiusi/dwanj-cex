@@ -23,7 +23,6 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
 
     @Override
     public void match(OrderEntity order, OrderBook orderBook, DisruptorEvent event) {
-        // 【调试日志】
         log.info(">>> 开始撮合订单: id={}, side={}, price={}, qty={}", 
                 order.getId(), order.getSide(), order.getPrice(), order.getQuantity());
 
@@ -36,7 +35,6 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
 
         if (shouldAddToBook && !order.isFullyFilled()) {
             orderBook.add(order);
-            // 【调试日志】
             log.info(">>> 订单已加入订单簿: id={}, remaining={}", order.getId(), order.getRemaining());
         } else {
             log.info(">>> 订单未加入订单簿: id={}, fullyFilled={}, shouldAddToBook={}", 
@@ -113,39 +111,39 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
                 continue;
             }
 
-            processTrade(buyOrder, sellOrder, OrderBook.toBigDecimal(bidBucket.getPrice()), orderBook, event);
+            processTrade(sellOrder, buyOrder, OrderBook.toBigDecimal(bidBucket.getPrice()), orderBook, event);
         }
         return true;
     }
 
-    private void processTrade(OrderEntity buyOrder, OrderEntity sellOrder, BigDecimal price, OrderBook orderBook, DisruptorEvent event) {
-        BigDecimal tradedQty = buyOrder.getRemaining().min(sellOrder.getRemaining());
+    private void processTrade(OrderEntity takerOrder, OrderEntity makerOrder, BigDecimal price, OrderBook orderBook, DisruptorEvent event) {
+        BigDecimal tradedQty = takerOrder.getRemaining().min(makerOrder.getRemaining());
         
-        log.info(">>> 撮合成功: BuyOrder[{}] vs SellOrder[{}] | Price: {} | Qty: {}", 
-                buyOrder.getId(), sellOrder.getId(), price, tradedQty);
+        log.info(">>> 撮合成功: Taker[{}] vs Maker[{}] | Price: {} | Qty: {}", 
+                takerOrder.getId(), makerOrder.getId(), price, tradedQty);
 
-        buyOrder.addFilled(tradedQty);
-        sellOrder.addFilled(tradedQty);
+        takerOrder.addFilled(tradedQty);
+        makerOrder.addFilled(tradedQty);
 
-        event.addTradeEvent(createTradeEvent(buyOrder, sellOrder, price, tradedQty));
+        event.addTradeEvent(createTradeEvent(takerOrder, makerOrder, price, tradedQty));
 
-        if (buyOrder.isFullyFilled()) {
-            orderBook.remove(buyOrder.getId());
+        if (takerOrder.isFullyFilled()) {
+            orderBook.remove(takerOrder.getId());
         }
-        if (sellOrder.isFullyFilled()) {
-            orderBook.remove(sellOrder.getId());
+        if (makerOrder.isFullyFilled()) {
+            orderBook.remove(makerOrder.getId());
         }
     }
 
-    private TradeEvent createTradeEvent(OrderEntity buyOrder, OrderEntity sellOrder, BigDecimal price, BigDecimal quantity) {
+    private TradeEvent createTradeEvent(OrderEntity takerOrder, OrderEntity makerOrder, BigDecimal price, BigDecimal quantity) {
         return TradeEvent.builder()
-                .symbol(buyOrder.getMarketSymbol())
+                .symbol(takerOrder.getMarketSymbol())
                 .price(price)
                 .quantity(quantity)
-                .buyOrderId(buyOrder.getId())
-                .sellOrderId(sellOrder.getId())
-                .buyerUserId(buyOrder.getUserId())
-                .sellerUserId(sellOrder.getUserId())
+                .takerOrderId(takerOrder.getId())
+                .makerOrderId(makerOrder.getId())
+                .takerUserId(takerOrder.getUserId())
+                .makerUserId(makerOrder.getUserId())
                 .build();
     }
 }

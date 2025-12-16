@@ -119,7 +119,9 @@ public class MatchingHandler implements EventHandler<DisruptorEvent> {
             redisTemplate.opsForValue().set("orderbook:snapshot:" + symbol, activeOrdersJson);
 
             String displaySnapshotJson = objectMapper.writeValueAsString(displaySnapshot);
-            redisTemplate.opsForValue().set("orderbook:display:snapshot:" + symbol, displaySnapshotJson);
+            String displayKey = "orderbook:display:snapshot:" + symbol;
+            log.info("写入Redis Key: {}", displayKey);
+            redisTemplate.opsForValue().set(displayKey, displaySnapshotJson);
 
             redisTemplate.convertAndSend("channel:orderbook:" + symbol, displaySnapshotJson);
 
@@ -133,7 +135,15 @@ public class MatchingHandler implements EventHandler<DisruptorEvent> {
         try {
             Map<String, List<OrderBookLevel>> snapshot = orderBook.getOrderBookSnapshot();
             String displaySnapshotJson = objectMapper.writeValueAsString(snapshot);
-            redisTemplate.opsForValue().set("orderbook:display:snapshot:" + symbol, displaySnapshotJson);
+            
+            // 1. 写入缓存
+            String displayKey = "orderbook:display:snapshot:" + symbol;
+            redisTemplate.opsForValue().set(displayKey, displaySnapshotJson);
+            
+            // 2. 【关键修复】发布通知，告知所有在线用户
+            redisTemplate.convertAndSend("channel:orderbook:" + symbol, displaySnapshotJson);
+            log.info("已发布 {} 的重建快照到频道。", symbol);
+
         } catch (JsonProcessingException e) {
             log.error("预热订单簿显示快照到Redis失败: symbol={}", symbol, e);
         }

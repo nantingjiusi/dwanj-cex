@@ -10,26 +10,19 @@ import java.util.List;
 
 @Mapper
 public interface TradeMapper {
-    @Insert("INSERT INTO trade(buy_order_id, sell_order_id, symbol, price, quantity, created_at) " +
-            "VALUES(#{buyOrderId}, #{sellOrderId}, #{symbol}, #{price}, #{quantity}, NOW())")
-    @Options(useGeneratedKeys = true, keyProperty = "id")
-    void insert(Trade trade);
 
-    /**
-     * 批量插入成交记录
-     */
     @Insert("<script>" +
-            "INSERT INTO trade(buy_order_id, sell_order_id, symbol, price, quantity, created_at) VALUES " +
+            "INSERT INTO trades(market_symbol, price, quantity, taker_order_id, maker_order_id, taker_user_id, maker_user_id, fee, created_at) VALUES " +
             "<foreach collection='list' item='item' separator=','>" +
-            "(#{item.buyOrderId}, #{item.sellOrderId}, #{item.symbol}, #{item.price}, #{item.quantity}, NOW())" +
+            "(#{item.marketSymbol}, #{item.price}, #{item.quantity}, #{item.takerOrderId}, #{item.makerOrderId}, #{item.takerUserId}, #{item.makerUserId}, #{item.fee}, NOW())" +
             "</foreach>" +
             "</script>")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     void insertBatch(List<Trade> trades);
 
-    @Select("SELECT * FROM trade WHERE user_id = #{userId}")
-    List<Trade> selectByUserId(Long userId);
+    @Select("SELECT * FROM trades WHERE taker_user_id = #{userId} OR maker_user_id = #{userId} ORDER BY id DESC")
+    List<Trade> findByUserId(Long userId);
 
-    @Select("SELECT * FROM trade WHERE symbol = #{symbol} ORDER BY id DESC LIMIT 1")
+    @Select("SELECT * FROM trades WHERE market_symbol = #{symbol} ORDER BY id DESC LIMIT 1")
     Trade findLastTradeBySymbol(String symbol);
 }

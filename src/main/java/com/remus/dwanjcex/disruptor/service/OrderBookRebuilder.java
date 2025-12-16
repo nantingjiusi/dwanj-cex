@@ -55,7 +55,6 @@ public class OrderBookRebuilder implements ApplicationRunner {
                         MatchingHandler targetHandler = disruptorManager.getMatchingHandler(symbol);
                         targetHandler.getBooks().put(symbol, rebuiltOrderBook);
                         targetHandler.rebuildCache(symbol, rebuiltOrderBook);
-                        
                         log.info("成功从Redis快照重建订单簿: {}, 包含 {} 个活跃订单。", symbol, activeOrders.size());
                     }
                 } else {

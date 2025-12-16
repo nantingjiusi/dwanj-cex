@@ -14,13 +14,5 @@ public class TradeService {
         this.tradeMapper = tradeMapper;
     }
 
-    /**
-     * 查询某用户作为买方或卖方的成交记录
-     *
-     * @param userId 用户ID
-     * @return 成交记录列表
-     */
-    public List<Trade> getTradesByUser(Long userId) {
-        return tradeMapper.selectByUserId(userId);
-    }
+
 }

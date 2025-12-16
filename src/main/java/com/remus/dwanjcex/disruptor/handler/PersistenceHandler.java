@@ -133,22 +133,28 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         if (market == null) return null;
 
         BigDecimal tradedCost = trade.getPrice().multiply(trade.getQuantity()).setScale(market.getPricePrecision(), RoundingMode.DOWN);
-        String reason = "trade:" + trade.getBuyOrderId() + "/" + trade.getSellOrderId();
+        String reason = "trade:" + trade.getTakerOrderId() + "/" + trade.getMakerOrderId();
 
-        walletService.reduceFrozen(trade.getBuyerUserId(), market.getQuoteAsset(), tradedCost, reason);
-        walletService.reduceFrozen(trade.getSellerUserId(), market.getBaseAsset(), trade.getQuantity(), reason);
-        walletService.settleCredit(trade.getBuyerUserId(), market.getBaseAsset(), trade.getQuantity(), reason);
-        walletService.settleCredit(trade.getSellerUserId(), market.getQuoteAsset(), tradedCost, reason);
+        walletService.reduceFrozen(trade.getTakerUserId(), market.getQuoteAsset(), tradedCost, reason);
+        walletService.reduceFrozen(trade.getMakerUserId(), market.getBaseAsset(), trade.getQuantity(), reason);
+        walletService.settleCredit(trade.getTakerUserId(), market.getBaseAsset(), trade.getQuantity(), reason);
+        walletService.settleCredit(trade.getMakerUserId(), market.getQuoteAsset(), tradedCost, reason);
 
         Trade tradeEntity = Trade.builder()
-                .buyOrderId(trade.getBuyOrderId()).sellOrderId(trade.getSellOrderId())
-                .symbol(trade.getSymbol()).price(trade.getPrice()).quantity(trade.getQuantity())
+                .marketSymbol(trade.getSymbol())
+                .price(trade.getPrice())
+                .quantity(trade.getQuantity())
+                .takerOrderId(trade.getTakerOrderId())
+                .makerOrderId(trade.getMakerOrderId())
+                .takerUserId(trade.getTakerUserId())
+                .makerUserId(trade.getMakerUserId())
+                .fee(BigDecimal.ZERO) // TODO: 手续费计算
                 .build();
         
         pendingTrades.add(tradeEntity);
 
-        updateOrderStatus(trade.getBuyOrderId(), trade.getQuantity(), tradedCost);
-        updateOrderStatus(trade.getSellOrderId(), trade.getQuantity(), tradedCost);
+        updateOrderStatus(trade.getTakerOrderId(), trade.getQuantity(), tradedCost);
+        updateOrderStatus(trade.getMakerOrderId(), trade.getQuantity(), tradedCost);
         
         return tradeEntity;
     }
@@ -293,8 +299,8 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     private void publishToRedis(Trade tradeEntity) {
         try {
             String payload = objectMapper.writeValueAsString(tradeEntity);
-            redisTemplate.convertAndSend("channel:ticker:" + tradeEntity.getSymbol(), payload);
-            redisTemplate.opsForValue().set("last_price:" + tradeEntity.getSymbol(), tradeEntity.getPrice().toPlainString());
+            redisTemplate.convertAndSend("channel:ticker:" + tradeEntity.getMarketSymbol(), payload);
+            redisTemplate.opsForValue().set("last_price:" + tradeEntity.getMarketSymbol(), tradeEntity.getPrice().toPlainString());
         } catch (Exception e) {
             log.error("发布成交记录到Redis失败", e);
         }

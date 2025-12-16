@@ -98,7 +98,7 @@ public class OrderBookWebSocketHandler extends TextWebSocketHandler {
 
     private void sendInitialSnapshot(WebSocketSession session, String topic) throws IOException {
         String symbol = topic.substring("orderbook:".length());
-        String redisKey = "orderbook_display_snapshot:" + symbol;
+        String redisKey = "orderbook:display:snapshot:" + symbol;
         String snapshotJson = redisTemplate.opsForValue().get(redisKey);
         
         if (snapshotJson != null) {

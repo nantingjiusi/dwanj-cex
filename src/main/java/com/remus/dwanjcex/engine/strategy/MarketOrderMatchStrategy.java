@@ -24,7 +24,6 @@ public class MarketOrderMatchStrategy implements MatchStrategy {
 
     @Override
     public void match(OrderEntity order, OrderBook orderBook, DisruptorEvent event) {
-        // 市价单永远不会被加入订单簿，所以match方法不需要返回值
         if (order.getSide() == OrderTypes.Side.BUY) {
             matchMarketBuy(order, orderBook, event);
         } else {
@@ -50,7 +49,6 @@ public class MarketOrderMatchStrategy implements MatchStrategy {
             if (buyOrder.getUserId().equals(sellOrder.getUserId())) {
                 boolean shouldBreak = stpStrategyFactory.getActiveStrategy().handleSelfTrade(buyOrder, sellOrder, orderBook, null, event);
                 if (shouldBreak) {
-                    // 市价单遇到自成交，根据ExpireTaker策略，直接终止撮合
                     break;
                 }
                 continue;
@@ -84,7 +82,6 @@ public class MarketOrderMatchStrategy implements MatchStrategy {
             if (sellOrder.getUserId().equals(buyOrder.getUserId())) {
                 boolean shouldBreak = stpStrategyFactory.getActiveStrategy().handleSelfTrade(sellOrder, buyOrder, orderBook, null, event);
                 if (shouldBreak) {
-                    // 市价单遇到自成交，根据ExpireTaker策略，直接终止撮合
                     break;
                 }
                 continue;
@@ -92,45 +89,47 @@ public class MarketOrderMatchStrategy implements MatchStrategy {
 
             BigDecimal tradedQty = sellOrder.getRemaining().min(buyOrder.getRemaining());
 
-            processTrade(buyOrder, sellOrder, price, tradedQty, orderBook, event);
+            processTrade(sellOrder, buyOrder, price, tradedQty, orderBook, event);
 
             if (bidBucket.isEmpty()) orderBook.getBids().remove(bidBucket.getPrice());
         }
     }
 
-    private void processTrade(OrderEntity buyOrder, OrderEntity sellOrder, BigDecimal price, BigDecimal tradedQty, OrderBook orderBook, DisruptorEvent event) {
-        log.info(">>> 撮合成功: BuyOrder[{}] vs SellOrder[{}] | Price: {} | Qty: {}", 
-                buyOrder.getId(), sellOrder.getId(), price, tradedQty);
+    private void processTrade(OrderEntity takerOrder, OrderEntity makerOrder, BigDecimal price, BigDecimal tradedQty, OrderBook orderBook, DisruptorEvent event) {
+        log.info(">>> 撮合成功: Taker[{}] vs Maker[{}] | Price: {} | Qty: {}", 
+                takerOrder.getId(), makerOrder.getId(), price, tradedQty);
 
         BigDecimal cost = tradedQty.multiply(price);
         
-        buyOrder.addFilled(tradedQty);
-        // 市价买单需要累加成交额
-        if (buyOrder.getType() == OrderTypes.OrderType.MARKET && buyOrder.getSide() == OrderTypes.Side.BUY) {
-            buyOrder.addQuoteFilled(cost);
+        takerOrder.addFilled(tradedQty);
+        if (takerOrder.getType() == OrderTypes.OrderType.MARKET && takerOrder.getSide() == OrderTypes.Side.BUY) {
+            takerOrder.addQuoteFilled(cost);
         }
         
-        sellOrder.addFilled(tradedQty);
-        // 如果对手单是市价买单，也需要更新其成交额
-        if (sellOrder.getType() == OrderTypes.OrderType.MARKET && sellOrder.getSide() == OrderTypes.Side.BUY) {
-            sellOrder.addQuoteFilled(cost);
+        makerOrder.addFilled(tradedQty);
+        if (makerOrder.getType() == OrderTypes.OrderType.MARKET && makerOrder.getSide() == OrderTypes.Side.BUY) {
+            makerOrder.addQuoteFilled(cost);
         }
 
-        event.addTradeEvent(createTradeEvent(buyOrder, sellOrder, price, tradedQty));
+        event.addTradeEvent(createTradeEvent(takerOrder, makerOrder, price, tradedQty));
 
-        if (buyOrder.isFullyFilled()) {
-            orderBook.remove(buyOrder.getId());
+        if (takerOrder.isFullyFilled()) {
+            orderBook.remove(takerOrder.getId());
         }
-        if (sellOrder.isFullyFilled()) {
-            orderBook.remove(sellOrder.getId());
+        if (makerOrder.isFullyFilled()) {
+            orderBook.remove(makerOrder.getId());
         }
     }
 
-    private TradeEvent createTradeEvent(OrderEntity buyOrder, OrderEntity sellOrder, BigDecimal price, BigDecimal quantity) {
+    private TradeEvent createTradeEvent(OrderEntity takerOrder, OrderEntity makerOrder, BigDecimal price, BigDecimal quantity) {
         return TradeEvent.builder()
-                .symbol(buyOrder.getMarketSymbol()).price(price).quantity(quantity)
-                .buyOrderId(buyOrder.getId()).sellOrderId(sellOrder.getId())
-                .buyerUserId(buyOrder.getUserId()).sellerUserId(sellOrder.getUserId())
+                .symbol(takerOrder.getMarketSymbol())
+                .price(price)
+                .quantity(quantity)
+                .takerOrderId(takerOrder.getId())
+                .makerOrderId(makerOrder.getId())
+                .takerUserId(takerOrder.getUserId())
+                .makerUserId(makerOrder.getUserId())
                 .build();
     }
 }
