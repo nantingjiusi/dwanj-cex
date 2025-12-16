@@ -164,7 +164,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     public void updateMarketOrderAvgPrice(Long orderId, BigDecimal totalTradedQty, BigDecimal totalTradedCost) {
         OrderEntity incomingOrder = getOrderFromCacheOrDb(orderId);
         if (incomingOrder != null && incomingOrder.getType() == OrderTypes.OrderType.MARKET && totalTradedQty.compareTo(BigDecimal.ZERO) > 0) {
-            Market market = marketService.getMarket(incomingOrder.getSymbol());
+            Market market = marketService.getMarket(incomingOrder.getMarketSymbol());
             if (market != null) {
                 BigDecimal avgPrice = totalTradedCost.divide(totalTradedQty, market.getPricePrecision(), RoundingMode.HALF_UP);
                 incomingOrder.setPrice(avgPrice);
@@ -182,7 +182,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         if (isSelfTradeCancel || isMarketOrderAndNotFilled) {
             String reason = isSelfTradeCancel ? "Self-trade detected" : "Market order closed due to insufficient depth";
             if (finalOrderState.getType() == OrderTypes.OrderType.MARKET && finalOrderState.getSide() == OrderTypes.Side.BUY) {
-                finalOrderState.setAmount(finalOrderState.getFilled());
+                finalOrderState.setQuantity(finalOrderState.getFilled());
             }
             unfreezeRemainingFunds(finalOrderState, reason);
             if (finalOrderState.getFilled().compareTo(BigDecimal.ZERO) > 0) {
@@ -194,7 +194,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
 
             if (isSelfTradeCancel) {
                 log.warn("通过DisruptorManager强制从内存中移除订单: {}", orderId);
-                disruptorManager.getMatchingHandler(finalOrderState.getSymbol()).removeOrder(finalOrderState.getSymbol(), orderId);
+                disruptorManager.getMatchingHandler(finalOrderState.getMarketSymbol()).removeOrder(finalOrderState.getMarketSymbol(), orderId);
             }
         }
     }
@@ -203,13 +203,13 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         if (order.getStatus() == OrderStatus.CANCELED || order.getStatus() == OrderStatus.FILLED || order.getStatus() == OrderStatus.PARTIALLY_FILLED_AND_CLOSED) {
             return;
         }
-        Market market = marketService.getMarket(order.getSymbol());
+        Market market = marketService.getMarket(order.getMarketSymbol());
         if (market == null) return;
 
         if (order.getSide() == OrderTypes.Side.BUY) {
             BigDecimal amountToUnfreeze;
             if (order.getType() == OrderTypes.OrderType.LIMIT) {
-                BigDecimal remainingQty = order.getAmount().subtract(order.getFilled());
+                BigDecimal remainingQty = order.getQuantity().subtract(order.getFilled());
                 amountToUnfreeze = order.getPrice().multiply(remainingQty).setScale(market.getPricePrecision(), RoundingMode.HALF_UP);
             } else {
                 amountToUnfreeze = order.getQuoteAmount().subtract(order.getQuoteFilled());
@@ -218,7 +218,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
                 walletService.unfreeze(order.getUserId(), market.getQuoteAsset(), amountToUnfreeze, reason + ":" + order.getId());
             }
         } else {
-            BigDecimal remainingQty = order.getAmount().subtract(order.getFilled());
+            BigDecimal remainingQty = order.getQuantity().subtract(order.getFilled());
             if (remainingQty.compareTo(BigDecimal.ZERO) > 0) {
                 walletService.unfreeze(order.getUserId(), market.getBaseAsset(), remainingQty, reason + ":" + order.getId());
             }

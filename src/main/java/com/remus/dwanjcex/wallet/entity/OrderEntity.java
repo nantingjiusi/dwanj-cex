@@ -17,61 +17,57 @@ import java.util.Objects;
 public class OrderEntity {
     private Long id;
     private Long userId;
-    private String symbol;
-    private OrderTypes.OrderType type;
+    private String marketSymbol;
     private OrderTypes.Side side;
-
+    private OrderTypes.OrderType type;
+    
     @Builder.Default
     private BigDecimal price = BigDecimal.ZERO;
-
-    // 【关键修复】为可能为null的字段提供默认值，以满足数据库NOT NULL约束
+    
     @Builder.Default
-    private BigDecimal amount = BigDecimal.ZERO;
-
-    @Builder.Default
-    private BigDecimal quoteAmount = BigDecimal.ZERO;
-
+    private BigDecimal quantity = BigDecimal.ZERO;
+    
     @Builder.Default
     private BigDecimal filled = BigDecimal.ZERO;
+    
+    // 【修复】这个字段应该在addFilled中计算，而不是直接持久化
+    // private BigDecimal remaining; 
+    
+    private OrderStatus status;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
 
+    // 非数据库字段
+    @Builder.Default
+    private BigDecimal quoteAmount = BigDecimal.ZERO;
+    
     @Builder.Default
     private BigDecimal quoteFilled = BigDecimal.ZERO;
 
-    private OrderStatus status;
-    @Builder.Default
-    private LocalDateTime createdAt = LocalDateTime.now();
-    @Builder.Default
-    private LocalDateTime updatedAt = LocalDateTime.now();
-    @Builder.Default
-    private Long version = 0L;
-
+    /**
+     * 【关键修复】提供一个动态计算的getRemaining方法
+     */
     public BigDecimal getRemaining() {
-        if (type == OrderTypes.OrderType.MARKET && side == OrderTypes.Side.BUY) {
-            // 市价买单的剩余是金额
-            if (quoteFilled == null) return quoteAmount;
-            return quoteAmount.subtract(quoteFilled);
-        } else {
-            // 其他订单的剩余是数量
-            if (filled == null) return amount;
-            return amount.subtract(filled);
-        }
+        if (this.quantity == null) return BigDecimal.ZERO;
+        if (this.filled == null) return this.quantity;
+        return this.quantity.subtract(this.filled);
     }
 
     public void addFilled(BigDecimal qty) {
-        if (filled == null) filled = BigDecimal.ZERO;
-        filled = filled.add(qty);
+        if (this.filled == null) this.filled = BigDecimal.ZERO;
+        this.filled = this.filled.add(qty);
     }
     
     public void addQuoteFilled(BigDecimal quoteQty) {
-        if (quoteFilled == null) quoteFilled = BigDecimal.ZERO;
-        quoteFilled = quoteFilled.add(quoteQty);
+        if (this.quoteFilled == null) this.quoteFilled = BigDecimal.ZERO;
+        this.quoteFilled = this.quoteFilled.add(quoteQty);
     }
 
     public boolean isFullyFilled() {
-        if (type == OrderTypes.OrderType.MARKET && side == OrderTypes.Side.BUY) {
-            return quoteFilled != null && quoteAmount != null && quoteFilled.compareTo(quoteAmount) >= 0;
+        if (this.type == OrderTypes.OrderType.MARKET && this.side == OrderTypes.Side.BUY) {
+            return this.quoteFilled != null && this.quoteAmount != null && this.quoteAmount.compareTo(BigDecimal.ZERO) > 0 && this.quoteFilled.compareTo(this.quoteAmount) >= 0;
         } else {
-            return filled != null && amount != null && amount.compareTo(BigDecimal.ZERO) > 0 && filled.compareTo(amount) >= 0;
+            return this.quantity != null && this.quantity.compareTo(BigDecimal.ZERO) > 0 && this.filled.compareTo(this.quantity) >= 0;
         }
     }
 

@@ -20,7 +20,7 @@ public class MarketMakerBot {
     private static final RestTemplate restTemplate = new RestTemplate();
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
-    private static final int USER_COUNT = 20;
+    private static final int USER_COUNT = 10;
     private static final String SYMBOL = "BTCUSDT";
     private static final BigDecimal INITIAL_USDT = new BigDecimal("1000000");
     private static final BigDecimal INITIAL_BTC = new BigDecimal("100");

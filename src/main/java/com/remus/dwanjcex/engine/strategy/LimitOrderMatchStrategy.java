@@ -23,7 +23,10 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
 
     @Override
     public void match(OrderEntity order, OrderBook orderBook, DisruptorEvent event) {
-        // 【关键修复】将撮合逻辑的返回值作为是否挂单的依据
+        // 【调试日志】
+        log.info(">>> 开始撮合订单: id={}, side={}, price={}, qty={}", 
+                order.getId(), order.getSide(), order.getPrice(), order.getQuantity());
+
         boolean shouldAddToBook = true; 
         if (order.getSide() == OrderTypes.Side.BUY) {
             shouldAddToBook = matchBuyOrder(order, orderBook, event);
@@ -31,9 +34,13 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
             shouldAddToBook = matchSellOrder(order, orderBook, event);
         }
 
-        // 只有当撮合逻辑允许，并且订单未完全成交时，才将其加入订单簿
         if (shouldAddToBook && !order.isFullyFilled()) {
             orderBook.add(order);
+            // 【调试日志】
+            log.info(">>> 订单已加入订单簿: id={}, remaining={}", order.getId(), order.getRemaining());
+        } else {
+            log.info(">>> 订单未加入订单簿: id={}, fullyFilled={}, shouldAddToBook={}", 
+                    order.getId(), order.isFullyFilled(), shouldAddToBook);
         }
     }
 
@@ -41,8 +48,15 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
         long buyPrice = OrderBook.toLong(buyOrder.getPrice());
         while (buyOrder.getRemaining().compareTo(BigDecimal.ZERO) > 0) {
             Optional<OrderBucket> bestAskBucketOpt = orderBook.getBestAskBucket();
-            if (bestAskBucketOpt.isEmpty() || buyPrice < bestAskBucketOpt.get().getPrice()) {
-                break; // 对手盘为空或价格不匹配，中断撮合，允许挂单
+            if (bestAskBucketOpt.isEmpty()) {
+                log.info(">>> 对手盘为空 (Ask)");
+                break;
+            }
+            
+            long bestAskPrice = bestAskBucketOpt.get().getPrice();
+            if (buyPrice < bestAskPrice) {
+                log.info(">>> 价格不匹配: buyPrice({}) < bestAskPrice({})", buyPrice, bestAskPrice);
+                break;
             }
 
             OrderBucket askBucket = bestAskBucketOpt.get();
@@ -52,10 +66,11 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
                 continue;
             }
 
+            log.info(">>> 发现对手单: id={}, price={}, qty={}", sellOrder.getId(), sellOrder.getPrice(), sellOrder.getRemaining());
+
             if (buyOrder.getUserId().equals(sellOrder.getUserId())) {
                 boolean shouldBreak = stpStrategyFactory.getActiveStrategy().handleSelfTrade(buyOrder, sellOrder, orderBook, null, event);
                 if (shouldBreak) {
-                    // 如果STP策略要求中断（例如ExpireTaker），则不再将此Taker单挂入订单簿
                     return false; 
                 }
                 continue;
@@ -63,7 +78,6 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
 
             processTrade(buyOrder, sellOrder, OrderBook.toBigDecimal(askBucket.getPrice()), orderBook, event);
         }
-        // 循环正常结束，意味着该订单可以被挂入订单簿
         return true;
     }
 
@@ -71,8 +85,15 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
         long sellPrice = OrderBook.toLong(sellOrder.getPrice());
         while (sellOrder.getRemaining().compareTo(BigDecimal.ZERO) > 0) {
             Optional<OrderBucket> bestBidBucketOpt = orderBook.getBestBidBucket();
-            if (bestBidBucketOpt.isEmpty() || sellPrice > bestBidBucketOpt.get().getPrice()) {
-                break; // 对手盘为空或价格不匹配，中断撮合，允许挂单
+            if (bestBidBucketOpt.isEmpty()) {
+                log.info(">>> 对手盘为空 (Bid)");
+                break;
+            }
+            
+            long bestBidPrice = bestBidBucketOpt.get().getPrice();
+            if (sellPrice > bestBidPrice) {
+                log.info(">>> 价格不匹配: sellPrice({}) > bestBidPrice({})", sellPrice, bestBidPrice);
+                break;
             }
 
             OrderBucket bidBucket = bestBidBucketOpt.get();
@@ -82,10 +103,11 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
                 continue;
             }
 
+            log.info(">>> 发现对手单: id={}, price={}, qty={}", buyOrder.getId(), buyOrder.getPrice(), buyOrder.getRemaining());
+
             if (sellOrder.getUserId().equals(buyOrder.getUserId())) {
                 boolean shouldBreak = stpStrategyFactory.getActiveStrategy().handleSelfTrade(sellOrder, buyOrder, orderBook, null, event);
                 if (shouldBreak) {
-                    // 如果STP策略要求中断，则不再将此Taker单挂入订单簿
                     return false;
                 }
                 continue;
@@ -93,7 +115,6 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
 
             processTrade(buyOrder, sellOrder, OrderBook.toBigDecimal(bidBucket.getPrice()), orderBook, event);
         }
-        // 循环正常结束，意味着该订单可以被挂入订单簿
         return true;
     }
 
@@ -118,9 +139,13 @@ public class LimitOrderMatchStrategy implements MatchStrategy {
 
     private TradeEvent createTradeEvent(OrderEntity buyOrder, OrderEntity sellOrder, BigDecimal price, BigDecimal quantity) {
         return TradeEvent.builder()
-                .symbol(buyOrder.getSymbol()).price(price).quantity(quantity)
-                .buyOrderId(buyOrder.getId()).sellOrderId(sellOrder.getId())
-                .buyerUserId(buyOrder.getUserId()).sellerUserId(sellOrder.getUserId())
+                .symbol(buyOrder.getMarketSymbol())
+                .price(price)
+                .quantity(quantity)
+                .buyOrderId(buyOrder.getId())
+                .sellOrderId(sellOrder.getId())
+                .buyerUserId(buyOrder.getUserId())
+                .sellerUserId(sellOrder.getUserId())
                 .build();
     }
 }

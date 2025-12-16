@@ -44,19 +44,19 @@ public class OrderService {
 
         OrderEntity.OrderEntityBuilder builder = OrderEntity.builder()
                 .userId(dto.getUserId())
-                .symbol(dto.getSymbol())
+                .marketSymbol(dto.getSymbol())
                 .type(dto.getType())
                 .side(dto.getSide())
                 .status(OrderStatus.NEW);
 
         if (dto.getType() == OrderTypes.OrderType.LIMIT) {
-            builder.price(dto.getPrice()).amount(dto.getAmount());
+            builder.price(dto.getPrice()).quantity(dto.getAmount());
         } else { // MARKET
             builder.price(BigDecimal.ZERO);
             if (dto.getSide() == OrderTypes.Side.BUY) {
                 builder.quoteAmount(dto.getQuoteAmount());
             } else {
-                builder.amount(dto.getAmount());
+                builder.quantity(dto.getAmount());
             }
         }
 
@@ -74,14 +74,14 @@ public class OrderService {
         if (order.getSide() == OrderTypes.Side.BUY) {
             BigDecimal amountToFreeze;
             if (order.getType() == OrderTypes.OrderType.LIMIT) {
-                amountToFreeze = order.getPrice().multiply(order.getAmount()).setScale(market.getPricePrecision(), RoundingMode.HALF_UP);
+                amountToFreeze = order.getPrice().multiply(order.getQuantity()).setScale(market.getPricePrecision(), RoundingMode.HALF_UP);
             } else { // MARKET BUY
                 amountToFreeze = order.getQuoteAmount();
             }
             freezeOk = walletService.freeze(order.getUserId(), market.getQuoteAsset(), amountToFreeze, KeyConstant.ORDER_FREEZE + order.getId());
             if (!freezeOk) throw new BusinessException(ResultCode.INSUFFICIENT_QUOTE);
         } else { // SELL
-            freezeOk = walletService.freeze(order.getUserId(), market.getBaseAsset(), order.getAmount(), KeyConstant.ORDER_FREEZE + order.getId());
+            freezeOk = walletService.freeze(order.getUserId(), market.getBaseAsset(), order.getQuantity(), KeyConstant.ORDER_FREEZE + order.getId());
             if (!freezeOk) throw new BusinessException(ResultCode.INSUFFICIENT_BASE);
         }
     }
@@ -99,7 +99,7 @@ public class OrderService {
             throw new BusinessException(ResultCode.ORDER_CANNOT_BE_CANCELED);
         }
 
-        CancelOrderDto cancelDto = new CancelOrderDto(orderId, userId, order.getSymbol(), order.getSide());
+        CancelOrderDto cancelDto = new CancelOrderDto(orderId, userId, order.getMarketSymbol(), order.getSide());
         eventPublisher.publishEvent(new OrderCancelEvent(this, cancelDto));
     }
 

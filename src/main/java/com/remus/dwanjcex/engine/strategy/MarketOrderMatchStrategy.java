@@ -128,7 +128,7 @@ public class MarketOrderMatchStrategy implements MatchStrategy {
 
     private TradeEvent createTradeEvent(OrderEntity buyOrder, OrderEntity sellOrder, BigDecimal price, BigDecimal quantity) {
         return TradeEvent.builder()
-                .symbol(buyOrder.getSymbol()).price(price).quantity(quantity)
+                .symbol(buyOrder.getMarketSymbol()).price(price).quantity(quantity)
                 .buyOrderId(buyOrder.getId()).sellOrderId(sellOrder.getId())
                 .buyerUserId(buyOrder.getUserId()).sellerUserId(sellOrder.getUserId())
                 .build();
