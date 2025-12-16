@@ -21,6 +21,8 @@ public class Market {
     private Integer quantityPrecision;
     private BigDecimal minOrderSize;
     private BigDecimal minOrderValue;
+    private BigDecimal makerFeeRate;
+    private BigDecimal takerFeeRate;
     private Boolean isEnabled;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

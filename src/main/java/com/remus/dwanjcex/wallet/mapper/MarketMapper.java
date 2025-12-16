@@ -12,9 +12,9 @@ import java.util.List;
 public interface MarketMapper {
 
     @Insert("INSERT INTO markets (symbol, base_asset, quote_asset, price_precision, quantity_precision, " +
-            "min_order_size, min_order_value, is_enabled, created_at, updated_at) " +
+            "min_order_size, min_order_value, maker_fee_rate, taker_fee_rate, is_enabled, created_at, updated_at) " +
             "VALUES (#{symbol}, #{baseAsset}, #{quoteAsset}, #{pricePrecision}, #{quantityPrecision}, " +
-            "#{minOrderSize}, #{minOrderValue}, #{isEnabled}, NOW(), NOW())")
+            "#{minOrderSize}, #{minOrderValue}, #{makerFeeRate}, #{takerFeeRate}, #{isEnabled}, NOW(), NOW())")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     void insert(Market market);
 

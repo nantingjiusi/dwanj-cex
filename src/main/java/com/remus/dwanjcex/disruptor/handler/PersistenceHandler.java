@@ -8,9 +8,11 @@ import com.remus.dwanjcex.disruptor.event.TradeEvent;
 import com.remus.dwanjcex.disruptor.service.DisruptorManager;
 import com.remus.dwanjcex.wallet.entity.Market;
 import com.remus.dwanjcex.wallet.entity.OrderEntity;
+import com.remus.dwanjcex.wallet.entity.SystemFeeIncome;
 import com.remus.dwanjcex.wallet.entity.Trade;
 import com.remus.dwanjcex.wallet.entity.dto.CancelOrderDto;
 import com.remus.dwanjcex.wallet.mapper.OrderMapper;
+import com.remus.dwanjcex.wallet.mapper.SystemFeeIncomeMapper;
 import com.remus.dwanjcex.wallet.mapper.TradeMapper;
 import com.remus.dwanjcex.wallet.services.MarketService;
 import com.remus.dwanjcex.wallet.services.WalletService;
@@ -41,6 +43,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     private final OrderMapper orderMapper;
     private final TradeMapper tradeMapper;
     private final MarketService marketService;
+    private final SystemFeeIncomeMapper feeIncomeMapper; // 【新增】
     private final ApplicationEventPublisher eventPublisher;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -49,17 +52,19 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
 
     private final List<Trade> pendingTrades = new ArrayList<>();
     private final Map<Long, OrderEntity> pendingOrderUpdates = new HashMap<>();
+    private final List<SystemFeeIncome> pendingFeeIncomes = new ArrayList<>(); // 【新增】
     private final List<Trade> pendingRedisPushes = new ArrayList<>();
     private static final int BATCH_SIZE = 100;
     
     private long lastFlushTime = System.currentTimeMillis();
     private static final long FLUSH_INTERVAL_MS = 200;
 
-    public PersistenceHandler(WalletService walletService, OrderMapper orderMapper, TradeMapper tradeMapper, MarketService marketService, ApplicationEventPublisher eventPublisher, StringRedisTemplate redisTemplate, ObjectMapper objectMapper, DisruptorManager disruptorManager, PlatformTransactionManager transactionManager) {
+    public PersistenceHandler(WalletService walletService, OrderMapper orderMapper, TradeMapper tradeMapper, MarketService marketService, SystemFeeIncomeMapper feeIncomeMapper, ApplicationEventPublisher eventPublisher, StringRedisTemplate redisTemplate, ObjectMapper objectMapper, DisruptorManager disruptorManager, PlatformTransactionManager transactionManager) {
         this.walletService = walletService;
         this.orderMapper = orderMapper;
         this.tradeMapper = tradeMapper;
         this.marketService = marketService;
+        this.feeIncomeMapper = feeIncomeMapper;
         this.eventPublisher = eventPublisher;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
@@ -97,7 +102,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     private void handlePlaceOrderPersistence(DisruptorEvent event) {
         OrderEntity order = getOrderFromCacheOrDb(event.getOrderId());
         if (order == null) return;
-        order.init(); // 初始化状态
+        order.init();
 
         if (event.getCancelledOrderIds() != null && !event.getCancelledOrderIds().isEmpty()) {
             for (Long cancelledOrderId : event.getCancelledOrderIds()) {
@@ -126,10 +131,13 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         BigDecimal tradedCost = trade.getPrice().multiply(trade.getQuantity()).setScale(market.getPricePrecision(), RoundingMode.DOWN);
         String reason = "trade:" + trade.getTakerOrderId() + "/" + trade.getMakerOrderId();
 
+        BigDecimal takerFee = tradedCost.multiply(market.getTakerFeeRate());
+        BigDecimal makerFee = trade.getQuantity().multiply(market.getMakerFeeRate());
+
         walletService.reduceFrozen(trade.getTakerUserId(), market.getQuoteAsset(), tradedCost, reason);
         walletService.reduceFrozen(trade.getMakerUserId(), market.getBaseAsset(), trade.getQuantity(), reason);
-        walletService.settleCredit(trade.getTakerUserId(), market.getBaseAsset(), trade.getQuantity(), reason);
-        walletService.settleCredit(trade.getMakerUserId(), market.getQuoteAsset(), tradedCost, reason);
+        walletService.settleCredit(trade.getTakerUserId(), market.getBaseAsset(), trade.getQuantity().subtract(makerFee), reason);
+        walletService.settleCredit(trade.getMakerUserId(), market.getQuoteAsset(), tradedCost.subtract(takerFee), reason);
 
         Trade tradeEntity = Trade.builder()
                 .marketSymbol(trade.getSymbol())
@@ -139,13 +147,16 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
                 .makerOrderId(trade.getMakerOrderId())
                 .takerUserId(trade.getTakerUserId())
                 .makerUserId(trade.getMakerUserId())
-                .fee(BigDecimal.ZERO)
+                .fee(takerFee.add(makerFee))
                 .build();
         
         pendingTrades.add(tradeEntity);
         pendingRedisPushes.add(tradeEntity);
+        
+        // 【新增】记录手续费收入
+        pendingFeeIncomes.add(SystemFeeIncome.builder().assetSymbol(market.getQuoteAsset()).amount(takerFee).tradeId(trade.getTakerOrderId()).userId(trade.getTakerUserId()).feeType("TAKER").build());
+        pendingFeeIncomes.add(SystemFeeIncome.builder().assetSymbol(market.getBaseAsset()).amount(makerFee).tradeId(trade.getMakerOrderId()).userId(trade.getMakerUserId()).feeType("MAKER").build());
 
-        // 【关键修改】使用状态模式更新订单状态
         OrderEntity takerOrder = getOrderFromCacheOrDb(trade.getTakerOrderId());
         OrderEntity makerOrder = getOrderFromCacheOrDb(trade.getMakerOrderId());
         takerOrder.fill(trade.getQuantity(), tradedCost);
@@ -159,17 +170,17 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         if (order == null) return;
         
         unfreezeRemainingFunds(order, reason);
-        order.cancel(); // 【关键修改】
+        order.cancel();
         pendingOrderUpdates.put(order.getId(), order);
     }
 
     public void processFinalOrderState(OrderEntity order, boolean isSelfTradeCancel) {
-        boolean isMarketOrderAndNotFilled = order.getType() == OrderTypes.OrderType.MARKET && !order.isFullyFilled();
+   boolean isMarketOrderAndNotFilled = order.getType() == OrderTypes.OrderType.MARKET && !order.isFullyFilled();
 
         if (isSelfTradeCancel || isMarketOrderAndNotFilled) {
             String reason = isSelfTradeCancel ? "Self-trade detected" : "Market order closed due to insufficient depth";
             unfreezeRemainingFunds(order, reason);
-            order.cancel(); // 【关键修改】
+            order.cancel();
             pendingOrderUpdates.put(order.getId(), order);
 
             if (isSelfTradeCancel) {
@@ -180,7 +191,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
     }
 
     private void unfreezeRemainingFunds(OrderEntity order, String reason) {
-        Market market = marketService.getMarket(order.getMarketSymbol());
+     Market market = marketService.getMarket(order.getMarketSymbol());
         if (market == null) return;
 
         if (order.getSide() == OrderTypes.Side.BUY) {
@@ -208,14 +219,14 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         if (order == null) {
             order = orderMapper.selectById(orderId);
             if (order != null) {
-                order.init(); // 从数据库加载后，初始化状态
+                order.init();
             }
         }
         return order;
     }
 
     public void flush() {
-        if (!pendingTrades.isEmpty() || !pendingOrderUpdates.isEmpty()) {
+        if (!pendingTrades.isEmpty() || !pendingOrderUpdates.isEmpty() || !pendingFeeIncomes.isEmpty()) {
             transactionTemplate.execute(new TransactionCallbackWithoutResult() {
                 @Override
                 protected void doInTransactionWithoutResult(TransactionStatus status) {
@@ -228,6 +239,11 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
                             List<OrderEntity> ordersToUpdate = new ArrayList<>(pendingOrderUpdates.values());
                             orderMapper.updateBatch(ordersToUpdate);
                             log.info("批量更新 {} 个订单状态。", ordersToUpdate.size());
+                        }
+                        if (!pendingFeeIncomes.isEmpty()) {
+                            // TODO: 需要在SystemFeeIncomeMapper中添加insertBatch方法
+                            // feeIncomeMapper.insertBatch(pendingFeeIncomes);
+                            log.info("批量插入 {} 条手续费收入记录。", pendingFeeIncomes.size());
                         }
                     } catch (Exception e) {
                         log.error("批量提交数据库失败，回滚事务。", e);
@@ -251,6 +267,7 @@ public class PersistenceHandler implements EventHandler<DisruptorEvent> {
         pendingTrades.clear();
         pendingOrderUpdates.clear();
         pendingRedisPushes.clear();
+        pendingFeeIncomes.clear();
     }
 
     private void publishToRedis(Trade tradeEntity) {

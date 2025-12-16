@@ -32,9 +32,9 @@ public class DataInitializer implements CommandLineRunner {
         createAssetIfNotExists("ZEU", "Zeus Coin", 6, "1", "1000000");
 
         // 2. 初始化交易对
-        createMarketIfNotExists("BTCUSDT", "BTC", "USDT", 2, 8, "0.00001", "10");
-        createMarketIfNotExists("ETHUSDT", "ETH", "USDT", 2, 8, "0.0001", "10");
-        createMarketIfNotExists("ZEUUSDT", "ZEU", "USDT", 4, 6, "1", "10");
+        createMarketIfNotExists("BTCUSDT", "BTC", "USDT", 2, 8, "0.00001", "10", "0.001", "0.002");
+        createMarketIfNotExists("ETHUSDT", "ETH", "USDT", 2, 8, "0.0001", "10", "0.001", "0.002");
+        createMarketIfNotExists("ZEUUSDT", "ZEU", "USDT", 4, 6, "1", "10", "0.001", "0.002");
 
         log.info("Default data initialized.");
     }
@@ -57,7 +57,7 @@ public class DataInitializer implements CommandLineRunner {
         }
     }
 
-    private void createMarketIfNotExists(String symbol, String baseAsset, String quoteAsset, int pricePrecision, int quantityPrecision, String minOrderSize, String minOrderValue) {
+    private void createMarketIfNotExists(String symbol, String baseAsset, String quoteAsset, int pricePrecision, int quantityPrecision, String minOrderSize, String minOrderValue, String makerFee, String takerFee) {
         if (marketService.getMarket(symbol) == null) {
             Market market = Market.builder()
                     .symbol(symbol)
@@ -67,6 +67,8 @@ public class DataInitializer implements CommandLineRunner {
                     .quantityPrecision(quantityPrecision)
                     .minOrderSize(new BigDecimal(minOrderSize))
                     .minOrderValue(new BigDecimal(minOrderValue))
+                    .makerFeeRate(new BigDecimal(makerFee))
+                    .takerFeeRate(new BigDecimal(takerFee))
                     .isEnabled(true)
                     .build();
             marketService.createMarket(market);
